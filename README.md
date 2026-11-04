@@ -11,10 +11,11 @@ Instalador para dar acceso de soporte remoto a un servidor Windows a traves de *
 | Opcion | Que hace |
 |---|---|
 | **V** Validar | Solo lectura. OpenSSH, permisos, claves, agente Arc y salida 443. Deja un informe junto al script. |
-| **I** Instalar | OpenSSH (si falta) + usuario + clave + agente Arc con nombre y etiquetas. Abre el monitor al acabar. |
+| **I** Instalar | OpenSSH solo si falta (si ya existe se usa tal cual) + usuario + clave + agente Arc con nombre y etiquetas. No toca un sistema de acceso anterior. Abre el monitor al acabar. |
 | **M** Manual | OpenSSH desde zip (Server 2016 o equipos sin Windows Update). |
 | **R** Reparar | Permisos, servicio, clave y configuracion del agente. |
-| **E** Eliminar | Quita todo (Arc, OpenSSH, claves, reglas). Pide confirmacion escrita y hace copia. |
+| **Q** Quitar | Solo Terminus: agente Arc y su clave. OpenSSH y el sistema anterior quedan igual. |
+| **L** Limpiar | Limpieza total del equipo (Arc, OpenSSH, claves, reglas, restos del sistema anterior). Pide confirmacion escrita y hace copia. |
 | **C** Monitor | Conexiones SSH en directo. |
 
 ## Seguridad

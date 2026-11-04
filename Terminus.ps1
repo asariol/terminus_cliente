@@ -8,7 +8,8 @@
    .\Terminus.ps1 -Modo Instalar [-Codigo C001 -Cliente "Gestoria Perez" -Maquina SRV1]
    .\Terminus.ps1 -Modo Manual                  (OpenSSH desde zip, Server 2016 / sin FoD)
    .\Terminus.ps1 -Modo Reparar
-   .\Terminus.ps1 -Modo Eliminar                (limpieza total, OpenSSH incluido)
+   .\Terminus.ps1 -Modo Quitar                  (solo Terminus: deja OpenSSH y el sistema anterior)
+   .\Terminus.ps1 -Modo Limpiar                 (limpieza total del equipo, OpenSSH incluido)
    .\Terminus.ps1 -Modo Monitor                 (conexiones en directo)
 
  Configuracion:
@@ -26,7 +27,8 @@
        * en administrators_authorized_keys solo se anaden/quitan
          lineas que acaban en " terminus"; el resto se respeta
        * no se tocan los ficheros del sistema anterior (Legado.Ficheros)
-   - Solo "Eliminar" borra todo (antiguo y nuevo), previa copia y
+   - "Quitar" deshace solo lo de Terminus (agente Arc + clave).
+   - "Limpiar" borra todo (anterior y nuevo), previa copia y
      confirmacion escrita.
 
  Ficheros:
@@ -36,7 +38,7 @@
 #>
 
 param(
-    [ValidateSet("Validar","Instalar","Manual","Reparar","Eliminar","Monitor")]
+    [ValidateSet("Validar","Instalar","Manual","Reparar","Quitar","Limpiar","Monitor")]
     [string]$Modo = "Validar",
     [string]$Codigo,          # codigo de cliente, ej. C001
     [string]$Cliente,         # nombre de cliente, ej. "Gestoria Perez"
@@ -492,7 +494,7 @@ Function Conectar-AgenteArc {
     if ($estado.Estado -eq "Connected") {
         EscribeLog "  Ya conectado a Azure como '$($estado.Nombre)'." DarkGray
         if ($estado.Nombre -ne $NombreRecurso) {
-            EscribeLog "  AVISO: el nombre pedido es '$NombreRecurso'. Para renombrar hay que eliminar (opcion E) y reinstalar." Yellow
+            EscribeLog "  AVISO: el nombre pedido es '$NombreRecurso'. Para renombrar: opcion [Q] Quitar y volver a instalar." Yellow
         }
         return
     }
@@ -786,7 +788,7 @@ Function Modo-Reparar {
         Configurar-AgenteArc
         $arc = Get-EstadoArc
         if ($arc.Estado -eq "Connected") { EscribeLog "  Conectado como $($arc.Nombre)." Green }
-        else { EscribeLog "  Estado '$($arc.Estado)': hay que volver a dar de alta (opcion [E] y luego [I])." Red }
+        else { EscribeLog "  Estado '$($arc.Estado)': hay que volver a dar de alta (opcion [Q] y luego [I])." Red }
     } else {
         EscribeLog "  Agente no instalado. Usar la opcion [I] Instalar." Yellow
     }
@@ -796,60 +798,23 @@ Function Modo-Reparar {
     EscribeLog "  Reparacion terminada. Recomendado: opcion [V] para comprobar." Green
 }
 
-# ---------------------------------------------------------------
-# ELIMINAR - limpieza total (Terminus + OpenSSH + entorno antiguo)
-# ---------------------------------------------------------------
-Function Modo-Eliminar {
-    $stamp  = Get-Date -Format "yyyyMMdd_HHmmss"
-    $backup = "$env:SystemDrive\TerminusBackup_$stamp"
-    $script:LogFile = "$backup\terminus_eliminar.log"     # C:\ProgramData\Terminus se borra
-
-    Completar-Datos "UsuarioLocal"
-    $ssh = Get-EstadoOpenSSH
-    $arc = Get-EstadoArc
-    $old = Get-EntornoAntiguo
-
-    Write-Host ""
-    Write-Host "=================== ATENCION ===================" -ForegroundColor Red
-    Write-Host " Se va a ELIMINAR TODO el acceso remoto de este equipo:" -ForegroundColor Red
-    Write-Host "  - Agente Azure Arc   : $(if ($arc.Instalado) { "$($arc.Estado) $($arc.Nombre)" } else { 'no instalado' })"
-    Write-Host "  - OpenSSH Server     : $($ssh.Tipo) $($ssh.Ruta)"
-    Write-Host "  - Carpeta $SshData (claves de host y autorizadas)"
-    Write-Host "  - Reglas de firewall de OpenSSH / sshd"
-    Write-Host "  - Restos del sistema anterior (ficheros de Legado.Ficheros)"
-    Write-Host " El sistema antiguo DEJARA DE FUNCIONAR en este equipo." -ForegroundColor Red
-    Write-Host " Antes se copia todo a: $backup" -ForegroundColor Yellow
-    Write-Host "================================================" -ForegroundColor Red
-    $conf = Read-Host "Escribe ELIMINAR para continuar"
-    if ($conf -cne "ELIMINAR") { Write-Host "Cancelado." -ForegroundColor Yellow; return }
-    $ErrorActionPreference = "Continue"      # limpieza: seguir aunque algo falle
-    $borrarUsuario = Pregunta "Eliminar tambien el usuario local '$($Terminus.UsuarioLocal)' y su perfil?"
-
-    New-Item -ItemType Directory -Path $backup -Force | Out-Null
-    EscribeLog "TERMINUS - ELIMINACION TOTAL  $stamp" Cyan
-
-    # --- 1. Copia de seguridad ----------------------------------
-    Titulo "1/6 Copia de seguridad"
-    if (Test-Path $SshData)     { Copy-Item $SshData "$backup\ssh" -Recurse -Force }
-    if (Test-Path $DirTerminus) { Copy-Item $DirTerminus "$backup\Terminus" -Recurse -Force }
-    $restos = @(Get-FicherosLegado)
-    foreach ($r in $restos) {
-        $dest = Join-Path $backup ("antiguo\" + ($r.FullName.Substring(3) -replace '[\\:]', '_'))
-        Copy-Item $r.FullName $dest -Recurse -Force
-    }
-    EscribeLog "  Copia en $backup (contiene claves privadas: borrarla cuando ya no haga falta)." Yellow
-
-    # --- 2. Agente Arc --------------------------------------------
-    Titulo "2/6 Agente Azure Arc"
+# Desconecta y desinstala el agente Arc (comun a Quitar y Limpiar).
+# Borrar el recurso en Azure es opcional: pide el secreto del SP.
+Function Quitar-AgenteArc {
+    param($arc)
     if ($arc.Instalado) {
         if ($arc.Estado -eq "Connected") {
             $hecho = $false
             if (Pregunta "Borrar tambien el recurso en Azure (pide el secreto del SP)?") {
                 Completar-Datos "SpAppId"
-                $s = Read-Host "Secreto del Service Principal" -AsSecureString
-                $sec = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))
+                $sec = $Terminus.SpSecret                  # de la config local, si esta
+                if (-not $sec) {
+                    $s = Read-Host "Secreto del Service Principal" -AsSecureString
+                    $sec = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))
+                }
                 & $AzcmExe disconnect --service-principal-id $Terminus.SpAppId --service-principal-secret $sec 2>&1 | Out-Null
-                $hecho = ($LASTEXITCODE -eq 0); $sec = $null
+                $hecho = ($LASTEXITCODE -eq 0)
+                Borrar-Secreto $sec; $sec = $null
             }
             if (-not $hecho) {
                 & $AzcmExe disconnect --force-local-only 2>&1 | Out-Null
@@ -866,6 +831,93 @@ Function Modo-Eliminar {
     foreach ($d in "$env:ProgramData\AzureConnectedMachineAgent", "$env:ProgramData\GuestConfig", "$env:ProgramW6432\AzureConnectedMachineAgent") {
         if (Test-Path $d) { Remove-Item $d -Recurse -Force -ErrorAction SilentlyContinue }
     }
+}
+
+# Quita solo las lineas de clave de Terminus. Las demas se conservan.
+Function Quitar-ClaveTerminus {
+    $lin = Get-LineasClaves
+    if ($lin.Terminus.Count -eq 0) { EscribeLog "  No hay clave Terminus." DarkGray; return }
+    Copy-Item $AdminKeys "$AdminKeys.terminus_$(Get-Date -Format yyyyMMddHHmmss).bak" -Force
+    [IO.File]::WriteAllText($AdminKeys, ((@($lin.Otras) -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+    Set-AclSsh $AdminKeys
+    EscribeLog "  Clave Terminus quitada ($($lin.Otras.Count) lineas del sistema anterior conservadas)." Green
+}
+
+# ---------------------------------------------------------------
+# QUITAR - solo Terminus (agente Arc + clave). OpenSSH, usuario y el
+# sistema anterior quedan como estaban. Sirve para volver atras.
+# ---------------------------------------------------------------
+Function Modo-Quitar {
+    $ErrorActionPreference = "Continue"
+    EscribeLog "TERMINUS - QUITAR TERMINUS (se conserva OpenSSH y el sistema anterior)" Cyan
+    $arc = Get-EstadoArc
+    Write-Host "  Se quitara: agente Azure Arc ($(if ($arc.Instalado) { "$($arc.Estado) $($arc.Nombre)" } else { 'no instalado' })) y la clave Terminus."
+    if (-not (Pregunta "Continuar?")) { EscribeLog "Cancelado." Yellow; return }
+
+    Titulo "1/2 Agente Azure Arc"
+    Quitar-AgenteArc $arc
+    Titulo "2/2 Clave Terminus"
+    Quitar-ClaveTerminus
+    if (Get-Service sshd -ErrorAction SilentlyContinue) { Restart-Service sshd -ErrorAction SilentlyContinue }
+    EscribeLog ""
+    EscribeLog "  Terminus quitado. OpenSSH y el sistema anterior siguen igual." Green
+}
+
+# ---------------------------------------------------------------
+# LIMPIAR - limpieza total del equipo (Terminus + OpenSSH + sistema anterior)
+# ---------------------------------------------------------------
+Function Modo-Limpiar {
+    $stamp  = Get-Date -Format "yyyyMMdd_HHmmss"
+    $backup = "$env:SystemDrive\TerminusBackup_$stamp"
+    $script:LogFile = "$backup\terminus_limpieza.log"     # C:\ProgramData\Terminus se borra
+
+    Completar-Datos "UsuarioLocal"
+    $ssh = Get-EstadoOpenSSH
+    $arc = Get-EstadoArc
+    $old = Get-EntornoAntiguo
+
+    Write-Host ""
+    Write-Host "=================== ATENCION ===================" -ForegroundColor Red
+    Write-Host " LIMPIEZA TOTAL: se quita TODO el acceso remoto de este equipo:" -ForegroundColor Red
+    Write-Host "  - Agente Azure Arc   : $(if ($arc.Instalado) { "$($arc.Estado) $($arc.Nombre)" } else { 'no instalado' })"
+    Write-Host "  - OpenSSH Server     : $($ssh.Tipo) $($ssh.Ruta)"
+    Write-Host "  - Carpeta $SshData (claves de host y autorizadas)"
+    Write-Host "  - Reglas de firewall de OpenSSH / sshd"
+    Write-Host "  - Restos del sistema anterior (ficheros de Legado.Ficheros)"
+    Write-Host " El sistema antiguo DEJARA DE FUNCIONAR en este equipo." -ForegroundColor Red
+    Write-Host " Antes se copia todo a: $backup" -ForegroundColor Yellow
+    Write-Host "================================================" -ForegroundColor Red
+    $conf = Read-Host "Escribe LIMPIAR para continuar"
+    if ($conf -cne "LIMPIAR") { Write-Host "Cancelado." -ForegroundColor Yellow; return }
+    $ErrorActionPreference = "Continue"      # limpieza: seguir aunque algo falle
+    # El usuario con el que se ejecuta no se puede borrar (normalmente es el mismo).
+    if ($env:USERNAME -eq $Terminus.UsuarioLocal) {
+        Write-Host "  El usuario '$($env:USERNAME)' es el de esta sesion: no se borra." -ForegroundColor Yellow
+        $borrarUsuario = $false
+    } else {
+        $borrarUsuario = Pregunta "Eliminar tambien el usuario local '$($Terminus.UsuarioLocal)' y su perfil?"
+    }
+
+    New-Item -ItemType Directory -Path $backup -Force | Out-Null
+    EscribeLog "TERMINUS - LIMPIEZA TOTAL  $stamp" Cyan
+
+    # --- 1. Copia de seguridad ----------------------------------
+    Titulo "1/6 Copia de seguridad"
+    if (Test-Path $SshData)     { Copy-Item $SshData "$backup\ssh" -Recurse -Force }
+    if (Test-Path $DirTerminus) { Copy-Item $DirTerminus "$backup\Terminus" -Recurse -Force }
+    $restos = @(Get-FicherosLegado)
+    if ($restos) { New-Item -ItemType Directory -Path "$backup\antiguo" -Force | Out-Null }
+    foreach ($r in $restos) {
+        # Nombre plano: C:\Users\x\.ssh\f -> Users_x_.ssh_f
+        $dest = Join-Path "$backup\antiguo" ($r.FullName.Substring(3) -replace '[\\:]', '_')
+        try   { Copy-Item $r.FullName $dest -Recurse -Force -ErrorAction Stop }
+        catch { EscribeLog "  AVISO: no se pudo copiar $($r.FullName): $($_.Exception.Message)" Yellow }
+    }
+    EscribeLog "  Copia en $backup (contiene claves privadas: borrarla cuando ya no haga falta)." Yellow
+
+    # --- 2. Agente Arc --------------------------------------------
+    Titulo "2/6 Agente Azure Arc"
+    Quitar-AgenteArc $arc
 
     # --- 3. OpenSSH ----------------------------------------------
     Titulo "3/6 OpenSSH Server"
@@ -993,7 +1045,8 @@ try {
         "Instalar" { Modo-Instalar }
         "Manual"   { Modo-Manual }
         "Reparar"  { Modo-Reparar }
-        "Eliminar" { Modo-Eliminar }
+        "Quitar"   { Modo-Quitar }
+        "Limpiar"  { Modo-Limpiar }
         "Monitor"  { Modo-Monitor }
     }
 } catch {

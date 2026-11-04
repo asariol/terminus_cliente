@@ -18,10 +18,12 @@ echo ==================================================
 echo   TERMINUS - Acceso de soporte (Azure Arc)
 echo ==================================================
 echo   [V] Validar (solo lectura, genera informe)
-echo   [I] Instalar  (OpenSSH + clave + agente Arc)
+echo   [I] Instalar Terminus
+echo       (usa el OpenSSH existente, no toca el sistema anterior)
 echo   [M] Instalacion manual de OpenSSH (zip)
 echo   [R] Reparar
-echo   [E] Eliminar TODO y dejar el equipo limpio
+echo   [Q] Quitar Terminus (deja OpenSSH y el sistema anterior)
+echo   [L] Limpieza TOTAL del equipo (todo, OpenSSH incluido)
 echo   [C] Monitor de conexiones
 echo   [0] Salir
 echo ==================================================
@@ -32,7 +34,8 @@ if /I "%option%"=="V" ( %PS% -Modo Validar  & pause & goto menu )
 if /I "%option%"=="I" ( %PS% -Modo Instalar & pause & goto menu )
 if /I "%option%"=="M" ( %PS% -Modo Manual   & pause & goto menu )
 if /I "%option%"=="R" ( %PS% -Modo Reparar  & pause & goto menu )
-if /I "%option%"=="E" ( %PS% -Modo Eliminar & pause & goto menu )
+if /I "%option%"=="Q" ( %PS% -Modo Quitar   & pause & goto menu )
+if /I "%option%"=="L" ( %PS% -Modo Limpiar  & pause & goto menu )
 if /I "%option%"=="C" ( start "Terminus - Monitor" %PS% -Modo Monitor & goto menu )
 if /I "%option%"=="0" exit /b
 
