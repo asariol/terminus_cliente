@@ -13,6 +13,9 @@
 #        SubscriptionId = "<guid>"
 #        SpAppId        = "<guid>"
 #        UsuarioLocal   = "<usuario>"
+#        SpSecret       = '<secreto>'   # opcional, entre comillas simples.
+#                                       # Se BORRA del fichero (y del historial
+#                                       # de PowerShell) al terminar el alta.
 #        Legado = @{
 #            Ficheros      = @(".ssh\<prefijo>_rsa*", "Downloads\<prefijo>_rsa*", "<log>.log")
 #            ReglaFirewall = "<nombre de la regla>"
@@ -20,8 +23,8 @@
 #        }
 #    }
 #
-#  El secreto del Service Principal NO va en ningun fichero: se pide
-#  siempre al instalar y no se guarda.
+#  El secreto del Service Principal no se guarda: si no esta en la
+#  configuracion local se pide al instalar, y si esta, se borra al acabar.
 # =====================================================================
 
 $Terminus = @{
@@ -34,7 +37,7 @@ $Terminus = @{
     TenantId        = ""
     SubscriptionId  = ""
     SpAppId         = ""
-    SpSecret        = ""            # nunca rellenar: se pide al instalar
+    SpSecret        = ""            # nunca aqui (repositorio publico)
 
     # --- Acceso SSH -------------------------------------------------
     UsuarioLocal    = ""            # se pide si no esta en la configuracion local

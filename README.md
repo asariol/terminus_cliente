@@ -19,7 +19,7 @@ Instalador para dar acceso de soporte remoto a un servidor Windows a traves de *
 
 ## Seguridad
 
-- Este repositorio no contiene datos de ningun entorno. Los IDs van en el fichero local o se preguntan; el secreto del Service Principal se pide siempre y no se guarda.
+- Este repositorio no contiene datos de ningun entorno. Los IDs van en el fichero local o se preguntan; el secreto del Service Principal se pide al instalar o, si se pone en el fichero local, se borra automaticamente al terminar el alta.
 - El agente Arc se configura solo para SSH (puerto 22), sin extensiones ni Guest Configuration.
 - La clave publica solo es valida para conexiones locales (`from="127.0.0.1,::1"`), que es por donde entra Arc.
 - Si ya existe un sistema de acceso por SSH, Instalar y Reparar no lo modifican.

@@ -457,6 +457,32 @@ Function Configurar-AgenteArc {
     EscribeLog "  Agente configurado: puerto 22, extensiones OFF, guest configuration OFF." Green
 }
 
+# Borra el secreto del SP de todo lo que pueda quedar en disco:
+#  - la linea SpSecret de Terminus.config.local.ps1 (si se puso alli)
+#  - las lineas del historial de PowerShell que lo contengan (al pegar
+#    la configuracion en la consola, PSReadLine la guarda en un fichero)
+# Se ejecuta siempre tras el alta, haya ido bien o mal.
+Function Borrar-Secreto {
+    param([string]$Valor)
+    if (-not $Valor) { return }
+    $local = Join-Path $PSScriptRoot "Terminus.config.local.ps1"
+    if (Test-Path $local) {
+        $lineas = Get-Content $local
+        if ($lineas -match '^\s*SpSecret\s*=') {
+            $lineas | Where-Object { $_ -notmatch '^\s*SpSecret\s*=' } | Set-Content $local -Encoding ASCII
+            EscribeLog "  Secreto eliminado de Terminus.config.local.ps1" Green
+        }
+    }
+    $hist = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
+    if (Test-Path $hist) {
+        $h = Get-Content $hist
+        if ($h | Where-Object { $_.Contains($Valor) }) {
+            $h | Where-Object { -not $_.Contains($Valor) } | Set-Content $hist -Encoding UTF8
+            EscribeLog "  Secreto eliminado del historial de PowerShell" Green
+        }
+    }
+}
+
 # Alta del equipo en Azure con nombre y etiquetas.
 Function Conectar-AgenteArc {
     param([string]$NombreRecurso, [Collections.IDictionary]$Etiquetas)
@@ -472,7 +498,8 @@ Function Conectar-AgenteArc {
     }
 
     $secreto = $Terminus.SpSecret
-    if (-not $secreto) {
+    if ($secreto) { EscribeLog "  Secreto tomado de la configuracion local (se borrara al terminar)." DarkGray }
+    else {
         $s = Read-Host "Secreto del Service Principal de alta (no se guarda)" -AsSecureString
         $secreto = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))
     }
@@ -490,6 +517,7 @@ Function Conectar-AgenteArc {
         --tags                     $tags `
         --cloud AzureCloud 2>&1 | Out-File -Append "$DirTerminus\arc_connect.log" -Encoding UTF8
     $codigo = $LASTEXITCODE
+    Borrar-Secreto $secreto
     $secreto = $null
     if ($codigo -ne 0) { throw "azcmagent connect fallo (codigo $codigo). Ver $DirTerminus\arc_connect.log" }
     EscribeLog "  Equipo dado de alta en Azure: $NombreRecurso" Green
