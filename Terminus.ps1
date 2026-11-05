@@ -216,6 +216,33 @@ Function Get-EstadoOpenSSH {
     }
 }
 
+# OpenSSH manual: la carpeta del programa debe ser legible por Usuarios.
+# Por cada conexion sshd lanza un proceso con una cuenta sin privilegios;
+# si no puede leer la carpeta, muere tras el intercambio de claves y la
+# conexion se corta ("Connection closed ... after KEXINIT").
+Function Test-AclCarpetaOpenSSH {
+    param($ssh)
+    if ($ssh.Tipo -ne "Manual" -or -not (Test-Path $ssh.Carpeta)) { return $true }
+    foreach ($r in (Get-Acl $ssh.Carpeta).Access) {
+        try { $sid = $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        if ($sid -eq "S-1-5-32-545" -and $r.AccessControlType -eq "Allow" -and
+            ($r.FileSystemRights -band [Security.AccessControl.FileSystemRights]::ReadAndExecute) -eq [Security.AccessControl.FileSystemRights]::ReadAndExecute) {
+            return $true
+        }
+    }
+    return $false
+}
+
+# Devuelve la carpeta del programa a los permisos heredados (los de
+# Program Files). Ahi no hay nada secreto: las claves estan en ProgramData.
+Function Reparar-AclCarpetaOpenSSH {
+    param($ssh)
+    if (Test-AclCarpetaOpenSSH $ssh) { return $false }
+    icacls $ssh.Carpeta /reset /T /C /Q 1>$null
+    EscribeLog "  Permisos de $($ssh.Carpeta) restablecidos (Usuarios con lectura)." Green
+    return $true
+}
+
 # Estado del agente Arc (azcmagent show en JSON).
 Function Get-EstadoArc {
     $ErrorActionPreference = "Continue"
@@ -555,6 +582,10 @@ Function Modo-Validar {
     if ($ssh.Tipo -ne "NoInstalado") {
         if ($ssh.Estado -eq "Running") { Resultado OK "Servicio sshd en ejecucion" } else { Resultado ERROR "Servicio sshd: $($ssh.Estado)" }
         if ($ssh.Arranque -eq "Auto")  { Resultado OK "Arranque automatico" }     else { Resultado AVISO "Arranque: $($ssh.Arranque)" }
+        if ($ssh.Tipo -eq "Manual") {
+            if (Test-AclCarpetaOpenSSH $ssh) { Resultado OK "Permisos de $($ssh.Carpeta) correctos" }
+            else { Resultado ERROR "$($ssh.Carpeta) sin lectura para Usuarios: las conexiones se cortan (lo corrigen [I] y [R])" }
+        }
         $escucha = Get-NetTCPConnection -LocalPort 22 -State Listen -ErrorAction SilentlyContinue
         if ($escucha) { Resultado OK "Escuchando en 22 ($((($escucha.LocalAddress) | Select-Object -Unique) -join ', '))" }
         else          { Resultado ERROR "Nada escucha en el puerto 22" }
@@ -678,6 +709,7 @@ Function Modo-Instalar {
     $instaladoAhora = $false
     if ($ssh.Tipo -ne "NoInstalado") {
         EscribeLog "  OpenSSH $($ssh.Tipo) ya presente ($($ssh.Ruta)): se usa tal cual." DarkGray
+        [void](Reparar-AclCarpetaOpenSSH $ssh)
         if ($ssh.Estado -ne "Running") { Set-Service sshd -StartupType Automatic; Start-Service sshd; EscribeLog "  Servicio sshd arrancado." Green }
     } elseif ($so.TieneFoD) {
         try { Instalar-OpenSSHNativo; $instaladoAhora = $true }
@@ -755,6 +787,7 @@ Function Modo-Reparar {
     $ssh = Get-EstadoOpenSSH
     if ($ssh.Tipo -eq "NoInstalado") { throw "OpenSSH no esta instalado. Usar la opcion [I] Instalar." }
     if ($ssh.Arranque -ne "Auto") { Set-Service sshd -StartupType Automatic; EscribeLog "  sshd en arranque automatico." Green }
+    if (Reparar-AclCarpetaOpenSSH $ssh) { $reiniciar = $true }
 
     # Claves de host: si los permisos estan mal, sshd no arranca.
     foreach ($k in Get-ChildItem "$SshData\ssh_host_*_key" -ErrorAction SilentlyContinue) {
