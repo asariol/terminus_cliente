@@ -24,7 +24,9 @@
 #    }
 #
 #  El secreto del Service Principal no se guarda: si no esta en la
-#  configuracion local se pide al instalar, y si esta, se borra al acabar.
+#  configuracion local se pide al instalar, y si esta, se borra al acabar
+#  (haya ido bien o mal). La carpeta C:\Terminus se deja solo para
+#  Administradores y SYSTEM al ejecutar.
 # =====================================================================
 
 $Terminus = @{
@@ -48,12 +50,18 @@ $Terminus = @{
     # Clave publica de operadores (no es secreta). El comentario final
     # "terminus" identifica la linea: solo se tocan las lineas con esa marca.
     ClavePublica    = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDEe83V2LYrfbWaqdDPZSr88s7asTnY1mAirX6N8Ce/L terminus"
-    # La clave solo vale para conexiones locales (Arc llega por 127.0.0.1).
+    # Restricciones de la clave en authorized_keys:
+    #  - solo conexiones locales (Arc llega por 127.0.0.1 / ::1): no sirve
+    #    por el puerto 22 publico aunque este abierto
+    #  - solo permite redirigir al RDP local (permitopen); sin agente ni X11.
+    #    Los comandos remotos (ssh/scp) siguen funcionando.
     RestringirLocal = $true
+    OpcionesClave   = 'permitopen="localhost:3389",permitopen="127.0.0.1:3389",no-agent-forwarding,no-X11-forwarding'
 
     # --- Instalacion manual de OpenSSH (Server 2016 o sin FoD) -------
     OpenSSHZipUrl    = "https://github.com/PowerShell/Win32-OpenSSH/releases/download/v9.5.0.0p1-Beta/OpenSSH-Win64.zip"
-    OpenSSHZipSha256 = ""
+    # SHA256 del zip oficial (v9.5.0.0p1-Beta). Si se cambia la URL, cambiar el hash.
+    OpenSSHZipSha256 = "BD48FE985D400402C278C485DB20E6A82BC4C7F7D8E0EF5A81128F523096530C"
 
     # --- Agente Azure Arc -------------------------------------------
     ArcMsiUrl       = "https://aka.ms/AzureConnectedMachineAgent"

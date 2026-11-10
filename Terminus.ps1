@@ -124,6 +124,20 @@ Function Pregunta {
     return ($r -match '^[sSyY]')
 }
 
+# Carpeta C:\Terminus solo para Administradores y SYSTEM. Al crearla bajo C:\
+# hereda "Usuarios autenticados: modificar": cualquier usuario del servidor
+# (p.ej. en un servidor de terminales) podria leer el secreto del SP o
+# cambiar los scripts que luego se ejecutan como administrador.
+Function Proteger-Carpeta {
+    param([string]$Ruta)
+    if (-not (Test-Path $Ruta)) { return }
+    icacls $Ruta /inheritance:r /grant:r "*${SID_ADMINS}:(OI)(CI)F" "*${SID_SYSTEM}:(OI)(CI)F" /T /C /Q 1>$null 2>$null
+    foreach ($r in (Get-Acl $Ruta).Access) {
+        try { $sid = $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
+        if ($sid -ne $SID_ADMINS -and $sid -ne $SID_SYSTEM) { icacls $Ruta /remove:g "*$sid" /T /C /Q 1>$null 2>$null }
+    }
+}
+
 Function EsAdministrador {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     return (New-Object Security.Principal.WindowsPrincipal $id).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -221,6 +235,7 @@ Function Get-EstadoOpenSSH {
         Estado      = if ($svc) { $svc.State } else { $null }
         Arranque    = if ($svc) { $svc.StartMode } else { $null }
         Capacidad   = if ($cap) { [string]$cap.State } else { "NoDisponible" }
+        Version     = if ($ruta -and (Test-Path $ruta)) { (Get-Item $ruta).VersionInfo.FileVersion } else { $null }
     }
 }
 
@@ -284,8 +299,11 @@ Function Get-LineasClaves {
 
 # Linea de clave tal como debe quedar segun la configuracion.
 Function Get-LineaClaveEsperada {
+    $op = @()
+    if ($Terminus.RestringirLocal) { $op += 'from="127.0.0.1,::1"' }
+    if ($Terminus.OpcionesClave)   { $op += $Terminus.OpcionesClave }
     $k = $Terminus.ClavePublica.Trim()
-    if ($Terminus.RestringirLocal) { $k = 'from="127.0.0.1,::1" ' + $k }
+    if ($op) { $k = ($op -join ",") + " " + $k }
     return $k
 }
 
@@ -674,7 +692,14 @@ Function Modo-Validar {
     $ssh = Get-EstadoOpenSSH
     switch ($ssh.Tipo) {
         "NoInstalado" { Resultado AVISO "No instalado (capacidad de Windows: $($ssh.Capacidad))" }
-        default       { Resultado OK "$($ssh.Tipo) - $($ssh.Ruta)" }
+        default       {
+            Resultado OK "$($ssh.Tipo) - $($ssh.Ruta) (version $($ssh.Version))"
+            # Versiones antiguas (p.ej. 8.1) con Windows en espanol no aplican
+            # "Match Group administrators": la clave va tambien al perfil del usuario.
+            if ($ssh.Version -and [version]($ssh.Version -replace '[^0-9.]', '') -lt [version]"8.9") {
+                Resultado INFO "OpenSSH antiguo: la clave Terminus se pondra tambien en el authorized_keys del usuario"
+            }
+        }
     }
     if ($ssh.Tipo -ne "NoInstalado") {
         if ($ssh.Estado -eq "Running") { Resultado OK "Servicio sshd en ejecucion" } else { Resultado ERROR "Servicio sshd: $($ssh.Estado)" }
@@ -1045,6 +1070,7 @@ Function Modo-Limpiar {
     }
 
     New-Item -ItemType Directory -Path $backup -Force | Out-Null
+    Proteger-Carpeta $backup        # contendra claves privadas de host y del sistema anterior
     EscribeLog "TERMINUS - LIMPIEZA TOTAL  $stamp" Cyan
 
     # --- 1. Copia de seguridad ----------------------------------
@@ -1185,6 +1211,9 @@ if (-not (EsAdministrador)) {
     exit 1
 }
 
+# Solo si es la carpeta de instalacion (X:\Terminus), no una de pruebas.
+if ($PSScriptRoot -match '^[A-Za-z]:\\Terminus$') { Proteger-Carpeta $PSScriptRoot }
+
 try {
     switch ($Modo) {
         "Validar"  { Modo-Validar }
@@ -1198,6 +1227,11 @@ try {
 } catch {
     EscribeLog "ERROR: $($_.Exception.Message)" Red
     EscribeLog "Detalle en: $LogFile" DarkGray
-    exit 1
+    $script:Fallo = $true
+} finally {
+    # El secreto no se queda en disco aunque la instalacion falle a medias
+    # (para reintentar, volver a pegar la configuracion de Bitwarden).
+    if ($Modo -in "Instalar", "Quitar", "Limpiar" -and $Terminus.SpSecret) { Borrar-Secreto $Terminus.SpSecret }
 }
+if ($script:Fallo) { exit 1 }
 exit 0
