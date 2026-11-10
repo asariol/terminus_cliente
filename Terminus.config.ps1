@@ -12,7 +12,7 @@
 #        TenantId       = "<guid>"
 #        SubscriptionId = "<guid>"
 #        SpAppId        = "<guid>"
-#        UsuarioLocal   = "<usuario>"
+#        UsuarioLocal   = "<usuario>"   # opcional: usuario o DOMINIO\usuario
 #        SpSecret       = '<secreto>'   # opcional, entre comillas simples.
 #                                       # Se BORRA del fichero (y del historial
 #                                       # de PowerShell) al terminar el alta.
@@ -40,7 +40,11 @@ $Terminus = @{
     SpSecret        = ""            # nunca aqui (repositorio publico)
 
     # --- Acceso SSH -------------------------------------------------
-    UsuarioLocal    = ""            # se pide si no esta en la configuracion local
+    # Usuario del tunel: uno que ya exista en el equipo del cliente y sea
+    # administrador ("usuario" local o "DOMINIO\usuario"). Vacio = se pregunta
+    # (Intro = el de la sesion). Se guarda como etiqueta UsuarioTunel en Azure
+    # y el operador lo lee de ahi: no hace falta el mismo usuario en todos.
+    UsuarioLocal    = ""
     # Clave publica de operadores (no es secreta). El comentario final
     # "terminus" identifica la linea: solo se tocan las lineas con esa marca.
     ClavePublica    = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIDEe83V2LYrfbWaqdDPZSr88s7asTnY1mAirX6N8Ce/L terminus"

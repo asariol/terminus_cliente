@@ -178,11 +178,16 @@ Function Completar-Datos {
         TenantId       = "Tenant ID de Azure"
         SubscriptionId = "Subscription ID de Azure"
         SpAppId        = "App ID del Service Principal de alta"
-        UsuarioLocal   = "Usuario local del tunel"
+        UsuarioLocal   = "Usuario del tunel, ya existente (usuario o DOMINIO\usuario)"
     }
     foreach ($k in $Claves) {
         while (-not $Terminus[$k] -or $Terminus[$k] -match '^0{8}-') {
-            $v = (Read-Host $textos[$k]).Trim()
+            if ($k -eq "UsuarioLocal") {
+                # Por defecto, el usuario de esta sesion (ya existe y es admin).
+                $def = "$env:USERDOMAIN\$env:USERNAME"
+                $v = (Read-Host "$($textos[$k]) [Intro = $def]").Trim()
+                if (-not $v) { $v = $def }
+            } else { $v = (Read-Host $textos[$k]).Trim() }
             if ($k -ne "UsuarioLocal" -and $v -notmatch '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$') {
                 Write-Host "  Formato no valido (se espera un GUID)." -ForegroundColor Yellow; continue
             }
@@ -404,12 +409,50 @@ Function Test-UsuarioAdmin {
     return ($miembros -contains $Nombre)
 }
 
-# Usuario local del tunel. Si existe no se cambia nada salvo asegurar que
-# es administrador (necesario para administrators_authorized_keys).
+# Tipo de usuario del tunel segun como se escriba en UsuarioLocal:
+#   "usuario" o "EQUIPO\usuario"  -> local
+#   "DOMINIO\usuario"             -> de dominio (no se crea ni se modifica)
+Function Get-UsuarioTunel {
+    $n = $Terminus.UsuarioLocal
+    $partes = $n.Split('\')
+    $dominio = if ($partes.Count -gt 1) { $partes[0] } else { "" }
+    $esDominio = $dominio -and $dominio -ne "." -and $dominio -ne $env:COMPUTERNAME
+    return [pscustomobject]@{
+        Completo  = $n
+        Corto     = $partes[-1]
+        Dominio   = $esDominio
+        EsSesion  = ($n -ieq "$env:USERDOMAIN\$env:USERNAME") -or
+                    (-not $esDominio -and $env:USERDOMAIN -eq $env:COMPUTERNAME -and $partes[-1] -ieq $env:USERNAME)
+        # Como lo usa ssh: local = nombre corto; dominio = DOMINIO\usuario
+        ParaSsh   = if ($esDominio) { $n } else { $partes[-1] }
+    }
+}
+
+# Usuario del tunel. Se usa uno que YA EXISTA en el equipo del cliente
+# (local o de dominio). Solo se crea un usuario local si se confirma.
+# Tiene que ser administrador (administrators_authorized_keys).
 Function Asegurar-Usuario {
-    $nombre = $Terminus.UsuarioLocal
+    $t = Get-UsuarioTunel
+
+    # --- Usuario de dominio: no se toca -------------------------
+    if ($t.Dominio) {
+        if ($t.EsSesion) {
+            if (-not (EsAdministrador)) { throw "El usuario '$($t.Completo)' no es administrador de este equipo." }
+            EscribeLog "  Usuario de dominio '$($t.Completo)' (el de esta sesion): administrador. No se modifica." Green
+        } else {
+            EscribeLog "  Usuario de dominio '$($t.Completo)': no se modifica." DarkGray
+            EscribeLog "  AVISO: no se puede comprobar desde aqui que sea administrador del equipo; debe serlo." Yellow
+        }
+        return
+    }
+
+    # --- Usuario local -------------------------------------------
+    $nombre = $t.Corto
     $u = Get-LocalUser -Name $nombre -ErrorAction SilentlyContinue
     if (-not $u) {
+        if (-not (Pregunta "El usuario local '$nombre' no existe. Crearlo (contrasena aleatoria, solo acceso por clave)?")) {
+            throw "Indica en UsuarioLocal un usuario que ya exista (local o DOMINIO\usuario)."
+        }
         # Contrasena aleatoria larga que no se guarda: el acceso es por clave.
         $set = [char[]]"ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!#%+-_=?"
         $rng = New-Object Security.Cryptography.RNGCryptoServiceProvider
@@ -426,6 +469,9 @@ Function Asegurar-Usuario {
         if (-not $u.Enabled) { EscribeLog "  AVISO: el usuario '$nombre' esta deshabilitado." Yellow }
     }
     if (-not (Test-UsuarioAdmin $nombre)) {
+        if ($u -and -not (Pregunta "'$nombre' no es administrador. Anadirlo al grupo Administradores?")) {
+            throw "El usuario del tunel tiene que ser administrador."
+        }
         Add-LocalGroupMember -SID $SID_ADMINS -Member $nombre
         EscribeLog "  '$nombre' anadido al grupo Administradores." Green
     }
@@ -600,12 +646,16 @@ Function Modo-Validar {
     }
 
     Titulo "Usuario y claves"
-    $u = Get-LocalUser -Name $Terminus.UsuarioLocal -ErrorAction SilentlyContinue
-    if ($u) {
-        $esAdmin = Test-UsuarioAdmin $Terminus.UsuarioLocal
+    $t = Get-UsuarioTunel
+    $u = if ($t.Dominio) { $null } else { Get-LocalUser -Name $t.Corto -ErrorAction SilentlyContinue }
+    if ($t.Dominio) {
+        if ($t.EsSesion) { Resultado $(if (EsAdministrador) { "OK" } else { "ERROR" }) "Usuario de dominio '$($t.Completo)' (esta sesion), administrador: $(EsAdministrador)" }
+        else             { Resultado INFO "Usuario de dominio '$($t.Completo)': comprobar que es administrador del equipo" }
+    } elseif ($u) {
+        $esAdmin = Test-UsuarioAdmin $t.Corto
         Resultado $(if ($u.Enabled) { "OK" } else { "ERROR" }) "Usuario '$($u.Name)' $(if ($u.Enabled) {'habilitado'} else {'DESHABILITADO'})"
         Resultado $(if ($esAdmin) { "OK" } else { "AVISO" }) "Administrador: $([bool]$esAdmin)"
-    } else { Resultado AVISO "Usuario '$($Terminus.UsuarioLocal)' no existe (se crea al instalar)" }
+    } else { Resultado AVISO "Usuario local '$($t.Corto)' no existe (al instalar se pregunta si crearlo; mejor usar uno existente)" }
 
     $lin = Get-LineasClaves
     if (Test-Path $AdminKeys) {
@@ -689,6 +739,7 @@ Function Modo-Instalar {
         Cliente  = ($Cliente -replace '[,=]', ' ').Trim()
         Equipo   = $env:COMPUTERNAME
         Terminus = "v1"
+        UsuarioTunel = (Get-UsuarioTunel).ParaSsh  # lo lee Tunnel-Open del operador
     }
     EscribeLog ""
     EscribeLog "  Nombre en Azure : $nombreRecurso" White
@@ -924,8 +975,13 @@ Function Modo-Limpiar {
     if ($conf -cne "LIMPIAR") { Write-Host "Cancelado." -ForegroundColor Yellow; return }
     $ErrorActionPreference = "Continue"      # limpieza: seguir aunque algo falle
     # El usuario con el que se ejecuta no se puede borrar (normalmente es el mismo).
-    if ($env:USERNAME -eq $Terminus.UsuarioLocal) {
-        Write-Host "  El usuario '$($env:USERNAME)' es el de esta sesion: no se borra." -ForegroundColor Yellow
+    $t = Get-UsuarioTunel
+    $uLocal = if ($t.Dominio) { $null } else { Get-LocalUser -Name $t.Corto -ErrorAction SilentlyContinue }
+    if ($t.EsSesion) {
+        Write-Host "  El usuario '$($t.Completo)' es el de esta sesion: no se borra." -ForegroundColor Yellow
+        $borrarUsuario = $false
+    } elseif (-not $uLocal -or $uLocal.Description -notlike "Terminus*") {
+        Write-Host "  El usuario '$($t.Completo)' no lo creo Terminus: no se borra." -ForegroundColor DarkGray
         $borrarUsuario = $false
     } else {
         $borrarUsuario = Pregunta "Eliminar tambien el usuario local '$($Terminus.UsuarioLocal)' y su perfil?"
