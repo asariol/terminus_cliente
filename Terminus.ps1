@@ -674,8 +674,10 @@ Function Conectar-AgenteArc {
     $secreto = $Terminus.SpSecret
     if ($secreto) { EscribeLog "  Secreto tomado de la configuracion local (se borrara al terminar)." DarkGray }
     else {
-        $s = Read-Host "Secreto del Service Principal de alta (no se guarda)" -AsSecureString
+        # Pegar con clic derecho: Ctrl+V aqui mete un caracter de control.
+        $s = Read-Host "Secreto del Service Principal de alta (pegar con CLIC DERECHO; no se guarda)" -AsSecureString
         $secreto = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))
+        if ($secreto.Length -lt 20 -or $secreto -match '[\x00-\x1F]') { throw "Secreto no valido (pegado con Ctrl+V?). Volver a pegar la linea de instalacion y repetir [I]." }
     }
     $tags = ($Etiquetas.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ","
 
