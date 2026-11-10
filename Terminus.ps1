@@ -426,8 +426,9 @@ Function Get-UsuarioTunel {
         Dominio   = $esDominio
         EsSesion  = ($n -ieq "$env:USERDOMAIN\$env:USERNAME") -or
                     (-not $esDominio -and $env:USERDOMAIN -eq $env:COMPUTERNAME -and $partes[-1] -ieq $env:USERNAME)
-        # Como lo usa ssh: local = nombre corto; dominio = DOMINIO\usuario
-        ParaSsh   = if ($esDominio) { $n } else { $partes[-1] }
+        # Como lo usa ssh: local = nombre corto; dominio = usuario@DOMINIO
+        # (sin "\": azcmagent se lo come al guardar la etiqueta)
+        ParaSsh   = if ($esDominio) { "$($partes[-1])@$dominio" } else { $partes[-1] }
     }
 }
 
