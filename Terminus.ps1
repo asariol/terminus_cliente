@@ -47,6 +47,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Sin barra de progreso: en PowerShell 5.1 hace las descargas (MSI de Arc)
+# muchisimo mas lentas.
+$ProgressPreference = "SilentlyContinue"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 ### =================================================================
