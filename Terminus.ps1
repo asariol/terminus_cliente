@@ -918,7 +918,7 @@ Function Modo-Instalar {
     EscribeLog "  sshd      : $($ssh.Estado)" $(if ($ssh.Estado -eq "Running") { "Green" } else { "Red" })
     EscribeLog "  Azure Arc : $($arc.Estado)  ($($arc.Nombre))" $(if ($arc.Estado -eq "Connected") { "Green" } else { "Red" })
     EscribeLog ""
-    EscribeLog "  Pendiente (administrador Azure): Habilitar-Acceso.ps1 -Maquina $($arc.Nombre)" Yellow
+    EscribeLog "  Pendiente (operador, en su PC): C:\Terminus\operador\Habilitar-Acceso.ps1" Yellow
     EscribeLog ""
     EscribeLog "  Conexion en mRemoteNG (operadores):" Cyan
     EscribeLog "    Host 127.0.0.1 | Puerto: el de este cliente (uno distinto por cliente)" Cyan
