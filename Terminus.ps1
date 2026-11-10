@@ -482,6 +482,52 @@ Function Asegurar-Usuario {
 }
 
 # Anade (o actualiza) nuestra linea de clave. Las demas lineas no se tocan.
+# authorized_keys del PERFIL del usuario del tunel. Hace falta ademas del de
+# administradores porque en OpenSSH antiguos (8.1) con Windows en espanol el
+# bloque "Match Group administrators" no aplica (el grupo es "Administradores")
+# y sshd solo mira el fichero del usuario. Devuelve $null si no hay perfil.
+Function Get-ClavesUsuarioPath {
+    try {
+        $t   = Get-UsuarioTunel
+        $nom = if ($t.Dominio) { $t.Completo } else { $t.Corto }
+        $sid = (New-Object Security.Principal.NTAccount $nom).Translate([Security.Principal.SecurityIdentifier]).Value
+        $pf  = Get-CimInstance Win32_UserProfile -Filter "SID='$sid'" -ErrorAction SilentlyContinue
+        if ($pf -and $pf.LocalPath) { return [pscustomobject]@{ Fichero = "$($pf.LocalPath)\.ssh\authorized_keys"; Sid = $sid } }
+    } catch { }
+    return $null
+}
+
+# Pone (o quita con -Quitar) nuestra linea en el authorized_keys del perfil.
+# Las demas lineas (sistema anterior) no se tocan.
+Function Set-ClaveUsuario {
+    param([switch]$Quitar)
+    $u = Get-ClavesUsuarioPath
+    if (-not $u) { EscribeLog "  Usuario sin perfil en este equipo: solo administrators_authorized_keys." DarkGray; return }
+    $existe = Test-Path $u.Fichero
+    $todas  = if ($existe) { @(Get-Content $u.Fichero | Where-Object { $_.Trim() -ne "" }) } else { @() }
+    $otras  = @($todas | Where-Object { $_.TrimEnd() -notmatch "\s$MARCA$" })
+    $mias   = @($todas | Where-Object { $_.TrimEnd() -match "\s$MARCA$" })
+    $esperada = Get-LineaClaveEsperada
+
+    if ($Quitar) {
+        if (-not $mias) { return }
+        $nuevo = $otras
+    } else {
+        if ($mias.Count -eq 1 -and $mias[0].Trim() -eq $esperada) { EscribeLog "  Clave Terminus ya presente en $($u.Fichero)." DarkGray; return }
+        $nuevo = @($otras) + $esperada
+    }
+    if ($existe) { Copy-Item $u.Fichero "$($u.Fichero).terminus_$(Get-Date -Format yyyyMMddHHmmss).bak" -Force }
+    else { New-Item -ItemType Directory -Path (Split-Path $u.Fichero) -Force | Out-Null }
+    [IO.File]::WriteAllText($u.Fichero, (($nuevo -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+    if (-not $existe) {
+        # Fichero nuevo: solo el usuario, SYSTEM y Administradores (sshd lo exige)
+        icacls $u.Fichero /inheritance:r 1>$null
+        icacls $u.Fichero /grant:r "*$($u.Sid):F" "*${SID_ADMINS}:F" "*${SID_SYSTEM}:F" 1>$null
+    }
+    if ($Quitar) { EscribeLog "  Clave Terminus quitada de $($u.Fichero)." Green }
+    else         { EscribeLog "  Clave Terminus en $($u.Fichero) ($($otras.Count) lineas ajenas conservadas)." Green }
+}
+
 Function Asegurar-Clave {
     if ($Terminus.ClavePublica -match "PEGAR_AQUI") { throw "Falta la clave publica en Terminus.config.ps1." }
     if (-not (Test-Path $SshData)) { New-Item -ItemType Directory -Path $SshData -Force | Out-Null }
@@ -501,6 +547,7 @@ Function Asegurar-Clave {
     }
     Set-AclSsh $AdminKeys
     EscribeLog "  Permisos de administrators_authorized_keys: SYSTEM + Administradores." Green
+    Set-ClaveUsuario
 }
 
 # Agente Arc: instalar MSI (firma verificada) y aplicar configuracion minima.
@@ -667,6 +714,11 @@ Function Modo-Validar {
         if ($lin.Terminus.Count -eq 1 -and $lin.Terminus[0].Trim() -eq (Get-LineaClaveEsperada)) { Resultado OK "Clave Terminus correcta" }
         elseif ($lin.Terminus.Count -eq 0) { Resultado AVISO "Clave Terminus no presente" }
         else { Resultado AVISO "Clave Terminus distinta de la configurada o duplicada" }
+        $cu = Get-ClavesUsuarioPath
+        if ($cu -and (Test-Path $cu.Fichero)) {
+            $hay = @(Get-Content $cu.Fichero | Where-Object { $_.TrimEnd() -match "\s$MARCA$" }).Count
+            Resultado INFO "authorized_keys del usuario ($($cu.Fichero)): clave Terminus $(if ($hay) {'presente'} else {'no presente'})"
+        }
         $p = Test-AclSsh $AdminKeys
         if ($p.Count -eq 0) { Resultado OK "Permisos de administrators_authorized_keys correctos" }
         else { Resultado ERROR "Permisos incorrectos: $($p -join '; ')" }
@@ -923,6 +975,7 @@ Function Quitar-AgenteArc {
 
 # Quita solo las lineas de clave de Terminus. Las demas se conservan.
 Function Quitar-ClaveTerminus {
+    Set-ClaveUsuario -Quitar
     $lin = Get-LineasClaves
     if ($lin.Terminus.Count -eq 0) { EscribeLog "  No hay clave Terminus." DarkGray; return }
     Copy-Item $AdminKeys "$AdminKeys.terminus_$(Get-Date -Format yyyyMMddHHmmss).bak" -Force
