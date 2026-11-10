@@ -919,6 +919,12 @@ Function Modo-Instalar {
     EscribeLog "  Azure Arc : $($arc.Estado)  ($($arc.Nombre))" $(if ($arc.Estado -eq "Connected") { "Green" } else { "Red" })
     EscribeLog ""
     EscribeLog "  Pendiente (administrador Azure): Habilitar-Acceso.ps1 -Maquina $($arc.Nombre)" Yellow
+    EscribeLog ""
+    EscribeLog "  Conexion en mRemoteNG (operadores):" Cyan
+    EscribeLog "    Host 127.0.0.1 | Puerto: el de este cliente (uno distinto por cliente)" Cyan
+    EscribeLog "    Campo de usuario: $($arc.Nombre)" Cyan
+    EscribeLog "    Herramienta antes: Terminus-Abrir | despues: Terminus-Cerrar" Cyan
+    EscribeLog "    Usuario/contrasena RDP: los del servidor" Cyan
     EscribeLog "  Log: $LogFile" DarkGray
 
     if (-not $SinMonitor) {
