@@ -132,11 +132,16 @@ Function Pregunta {
 Function Proteger-Carpeta {
     param([string]$Ruta)
     if (-not (Test-Path $Ruta)) { return }
-    icacls $Ruta /inheritance:r /grant:r "*${SID_ADMINS}:(OI)(CI)F" "*${SID_SYSTEM}:(OI)(CI)F" /T /C /Q 1>$null 2>$null
+    # 1. La carpeta: sin herencia de C:\, solo Administradores y SYSTEM (heredable)
+    icacls $Ruta /inheritance:r /grant:r "*${SID_ADMINS}:(OI)(CI)F" "*${SID_SYSTEM}:(OI)(CI)F" /C /Q 1>$null 2>$null
     foreach ($r in (Get-Acl $Ruta).Access) {
         try { $sid = $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
-        if ($sid -ne $SID_ADMINS -and $sid -ne $SID_SYSTEM) { icacls $Ruta /remove:g "*$sid" /T /C /Q 1>$null 2>$null }
+        if ($sid -ne $SID_ADMINS -and $sid -ne $SID_SYSTEM) { icacls $Ruta /remove:g "*$sid" /C /Q 1>$null 2>$null }
     }
+    # 2. El contenido: solo los permisos heredados de la carpeta (propietario
+    #    Administradores, por si algun fichero quedo sin permisos)
+    icacls "$Ruta\*" /setowner "*$SID_ADMINS" /T /C /Q 1>$null 2>$null
+    icacls "$Ruta\*" /reset /T /C /Q 1>$null 2>$null
 }
 
 Function EsAdministrador {
@@ -520,6 +525,20 @@ Function Get-ClavesUsuarioPath {
 # Las demas lineas (sistema anterior) no se tocan.
 Function Set-ClaveUsuario {
     param([switch]$Quitar)
+    if ($Quitar) {
+        # Al quitar se revisan todos los perfiles: no hace falta saber el usuario.
+        foreach ($pf in Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue) {
+            $f = "$($pf.LocalPath)\.ssh\authorized_keys"
+            if (-not $pf.LocalPath -or -not (Test-Path $f)) { continue }
+            $todas = @(Get-Content $f)
+            $otras = @($todas | Where-Object { $_.TrimEnd() -notmatch "\s$MARCA$" })
+            if ($otras.Count -eq $todas.Count) { continue }
+            Copy-Item $f "$f.terminus_$(Get-Date -Format yyyyMMddHHmmss).bak" -Force
+            [IO.File]::WriteAllText($f, ((@($otras | Where-Object { $_.Trim() }) -join "`n") + "`n"), (New-Object Text.UTF8Encoding $false))
+            EscribeLog "  Clave Terminus quitada de $f." Green
+        }
+        return
+    }
     $u = Get-ClavesUsuarioPath
     if (-not $u) { EscribeLog "  Usuario sin perfil en este equipo: solo administrators_authorized_keys." DarkGray; return }
     $existe = Test-Path $u.Fichero
@@ -612,10 +631,17 @@ Function Borrar-Secreto {
     if (-not $Valor) { return }
     $local = Join-Path $PSScriptRoot "Terminus.config.local.ps1"
     if (Test-Path $local) {
-        $lineas = Get-Content $local
-        if ($lineas -match '^\s*SpSecret\s*=') {
-            $lineas | Where-Object { $_ -notmatch '^\s*SpSecret\s*=' } | Set-Content $local -Encoding ASCII
-            EscribeLog "  Secreto eliminado de Terminus.config.local.ps1" Green
+        try {
+            $lineas = Get-Content $local -ErrorAction Stop
+            if ($lineas -match '^\s*SpSecret\s*=') {
+                $lineas | Where-Object { $_ -notmatch '^\s*SpSecret\s*=' } | Set-Content $local -Encoding ASCII -ErrorAction Stop
+                EscribeLog "  Secreto eliminado de Terminus.config.local.ps1" Green
+            }
+        } catch {
+            # Si no se puede reescribir, mejor sin fichero que con el secreto dentro.
+            Remove-Item $local -Force -ErrorAction SilentlyContinue
+            if (Test-Path $local) { EscribeLog "  AVISO: no se pudo borrar el secreto de $local. Borrar el fichero a mano." Red }
+            else { EscribeLog "  Terminus.config.local.ps1 eliminado (contenia el secreto)." Yellow }
         }
     }
     $hist = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
@@ -973,22 +999,11 @@ Function Quitar-AgenteArc {
     param($arc)
     if ($arc.Instalado) {
         if ($arc.Estado -eq "Connected") {
-            $hecho = $false
-            if (Pregunta "Borrar tambien el recurso en Azure (pide el secreto del SP)?") {
-                Completar-Datos "SpAppId"
-                $sec = $Terminus.SpSecret                  # de la config local, si esta
-                if (-not $sec) {
-                    $s = Read-Host "Secreto del Service Principal" -AsSecureString
-                    $sec = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))
-                }
-                & $AzcmExe disconnect --service-principal-id $Terminus.SpAppId --service-principal-secret $sec 2>&1 | Out-Null
-                $hecho = ($LASTEXITCODE -eq 0)
-                Borrar-Secreto $sec; $sec = $null
-            }
-            if (-not $hecho) {
-                & $AzcmExe disconnect --force-local-only 2>&1 | Out-Null
-                EscribeLog "  Desconectado solo en local. El administrador debe borrar '$($arc.Nombre)' en Azure." Yellow
-            } else { EscribeLog "  Recurso '$($arc.Nombre)' eliminado de Azure." Green }
+            # El Service Principal de alta solo puede dar de alta (rol Onboarding),
+            # no borrar: se desconecta en local y el recurso lo borra el administrador.
+            & $AzcmExe disconnect --force-local-only 2>&1 | Out-Null
+            EscribeLog "  Desconectado en local. Falta borrar el recurso en Azure (administrador, desde el bastion):" Yellow
+            EscribeLog "    az resource delete -g $($Terminus.ResourceGroup) -n $($arc.Nombre) --resource-type Microsoft.HybridCompute/machines" Yellow
         }
         $prod = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
                 Where-Object { $_.DisplayName -like "Azure Connected Machine Agent*" } | Select-Object -First 1
