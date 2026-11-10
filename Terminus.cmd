@@ -4,11 +4,21 @@ REM  Terminus.cmd - Menu del cliente. Solo guia a Terminus.ps1.
 REM  Se eleva a Administrador automaticamente si hace falta.
 REM =====================================================================
 
-net session >nul 2>&1
-if errorlevel 1 (
-    powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
-    exit /b
+REM fltmc solo funciona como Administrador. (No se usa "net session":
+REM falla siempre si el servicio Servidor esta parado, p.ej. en TSplus,
+REM y provocaba un bucle infinito de ventanas.)
+fltmc >nul 2>&1
+if not errorlevel 1 goto admin
+REM Si ya venimos de elevar y sigue sin ser admin, no volver a elevar (evita bucle).
+if /I "%~1"=="/elevado" (
+    echo No se han obtenido permisos de Administrador.
+    echo Ejecuta Terminus.cmd con boton derecho - Ejecutar como administrador.
+    pause
+    exit /b 1
 )
+powershell -NoProfile -Command "Start-Process -FilePath '%~f0' -ArgumentList '/elevado' -Verb RunAs"
+exit /b
+:admin
 
 set "PS=PowerShell -NoProfile -ExecutionPolicy Bypass -File "%~dp0Terminus.ps1""
 
