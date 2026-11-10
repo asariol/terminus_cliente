@@ -620,8 +620,11 @@ Function Borrar-Secreto {
     $hist = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
     if (Test-Path $hist) {
         $h = Get-Content $hist
-        if ($h | Where-Object { $_.Contains($Valor) }) {
-            $h | Where-Object { -not $_.Contains($Valor) } | Set-Content $hist -Encoding UTF8
+        # Tambien la linea de instalacion ($TerminusBloque='<base64>'): lleva el
+        # secreto codificado, no en claro.
+        $resto = @($h | Where-Object { -not ($_.Contains($Valor) -or $_ -match 'TerminusBloque') })
+        if ($resto.Count -ne @($h).Count) {
+            $resto | Set-Content $hist -Encoding UTF8
             EscribeLog "  Secreto eliminado del historial de PowerShell" Green
         }
     }

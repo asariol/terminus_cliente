@@ -4,7 +4,11 @@ Instalador para dar acceso de soporte remoto a un servidor Windows a traves de *
 
 ## Uso
 
-1. Descargar y descomprimir esta carpeta en el servidor (por ejemplo en `C:\Terminus`).
+Lo normal: en PowerShell como Administrador, pegar la **linea de instalacion** que entrega el administrador. Descarga esta carpeta en `C:\Terminus`, escribe `Terminus.config.local.ps1` (los datos del entorno van dentro de la linea, en base64) y abre el menu.
+
+A mano:
+
+1. Descargar y descomprimir esta carpeta en el servidor en `C:\Terminus`.
 2. (Opcional) Crear `Terminus.config.local.ps1` con los datos del entorno (ver ejemplo en `Terminus.config.ps1`). Lo que falte se pregunta por pantalla.
 3. Ejecutar `Terminus.cmd` (se eleva a Administrador solo).
 
