@@ -415,6 +415,9 @@ Function Instalar-OpenSSHManual {
     Expand-Archive -Path $zip -DestinationPath $DirTemp -Force
     if (Test-Path $destino) { Remove-Item $destino -Recurse -Force }
     Move-Item "$DirTemp\OpenSSH-Win64" $destino
+    # Move-Item conserva los permisos de TEMP (solo este usuario): sshd necesita
+    # que Usuarios pueda leer la carpeta (si no, corta tras KEXINIT).
+    icacls $destino /reset /T /C /Q 1>$null 2>$null
     & powershell -NoProfile -ExecutionPolicy Bypass -File "$destino\install-sshd.ps1" | Out-Null
 
     # PATH de sistema (para ssh-keygen, etc.)
