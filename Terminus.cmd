@@ -47,7 +47,8 @@ if /I "%option%"=="R" ( %PS% -Modo Reparar  & pause & goto menu )
 if /I "%option%"=="Q" ( %PS% -Modo Quitar   & pause & goto menu )
 if /I "%option%"=="L" ( %PS% -Modo Limpiar  & pause & goto menu )
 if /I "%option%"=="C" ( start "Terminus - Monitor" %PS% -Modo Monitor & goto menu )
-if /I "%option%"=="0" exit /b
+REM Al salir se borra el secreto del SP si sigue en la configuracion local.
+if /I "%option%"=="0" ( %PS% -Modo Salir & exit /b )
 
 echo Opcion no valida, intenta de nuevo.
 pause

@@ -11,6 +11,7 @@
    .\Terminus.ps1 -Modo Quitar                  (solo Terminus: deja OpenSSH y el sistema anterior)
    .\Terminus.ps1 -Modo Limpiar                 (limpieza total del equipo, OpenSSH incluido)
    .\Terminus.ps1 -Modo Monitor                 (conexiones en directo)
+   .\Terminus.ps1 -Modo Salir                   (borra el secreto del SP si quedo en la config)
 
  Configuracion:
    Terminus.config.ps1        generica (en el repositorio, igual para todos)
@@ -38,7 +39,7 @@
 #>
 
 param(
-    [ValidateSet("Validar","Instalar","Manual","Reparar","Quitar","Limpiar","Monitor")]
+    [ValidateSet("Validar","Instalar","Manual","Reparar","Quitar","Limpiar","Monitor","Salir")]
     [string]$Modo = "Validar",
     [string]$Codigo,          # codigo de cliente, ej. C001
     [string]$Cliente,         # nombre de cliente, ej. "Gestoria Perez"
@@ -1226,6 +1227,7 @@ try {
         "Quitar"   { Modo-Quitar }
         "Limpiar"  { Modo-Limpiar }
         "Monitor"  { Modo-Monitor }
+        "Salir"    { }                 # solo borra el secreto (bloque finally)
     }
 } catch {
     EscribeLog "ERROR: $($_.Exception.Message)" Red
@@ -1234,7 +1236,7 @@ try {
 } finally {
     # El secreto no se queda en disco aunque la instalacion falle a medias
     # (para reintentar, volver a pegar la configuracion de Bitwarden).
-    if ($Modo -in "Instalar", "Quitar", "Limpiar" -and $Terminus.SpSecret) { Borrar-Secreto $Terminus.SpSecret }
+    if ($Modo -in "Instalar", "Quitar", "Limpiar", "Salir" -and $Terminus.SpSecret) { Borrar-Secreto $Terminus.SpSecret }
 }
 if ($script:Fallo) { exit 1 }
 exit 0
