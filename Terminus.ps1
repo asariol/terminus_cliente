@@ -999,11 +999,23 @@ Function Quitar-AgenteArc {
     param($arc)
     if ($arc.Instalado) {
         if ($arc.Estado -eq "Connected") {
-            # El Service Principal de alta solo puede dar de alta (rol Onboarding),
-            # no borrar: se desconecta en local y el recurso lo borra el administrador.
-            & $AzcmExe disconnect --force-local-only 2>&1 | Out-Null
-            EscribeLog "  Desconectado en local. Falta borrar el recurso en Azure (administrador, desde el bastion):" Yellow
-            EscribeLog "    az resource delete -g $($Terminus.ResourceGroup) -n $($arc.Nombre) --resource-type Microsoft.HybridCompute/machines" Yellow
+            # Con el secreto del SP en la configuracion (linea de instalacion pegada)
+            # se borra tambien el recurso en Azure. El SP necesita, ademas del rol de
+            # alta, el rol "Terminus - Baja de equipos Arc" (admin\Preparar-Azure.ps1).
+            $hecho = $false
+            if ($Terminus.SpSecret -and $Terminus.SpAppId) {
+                & $AzcmExe disconnect --service-principal-id $Terminus.SpAppId --service-principal-secret $Terminus.SpSecret 2>&1 |
+                    Out-File -Append "$DirTerminus\arc_connect.log" -Encoding UTF8
+                $hecho = ($LASTEXITCODE -eq 0)
+            }
+            if ($hecho) { EscribeLog "  Recurso '$($arc.Nombre)' eliminado de Azure." Green }
+            else {
+                & $AzcmExe disconnect --force-local-only 2>&1 | Out-Null
+                if (-not $Terminus.SpSecret) { EscribeLog "  Sin secreto del SP en la configuracion (pegar la linea de instalacion para borrar tambien en Azure)." DarkGray }
+                else { EscribeLog "  El SP no pudo borrar el recurso (ver $DirTerminus\arc_connect.log)." Yellow }
+                EscribeLog "  Desconectado en local. Falta borrar el recurso en Azure (administrador, desde el bastion):" Yellow
+                EscribeLog "    az resource delete -g $($Terminus.ResourceGroup) -n $($arc.Nombre) --resource-type Microsoft.HybridCompute/machines" Yellow
+            }
         }
         $prod = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
                 Where-Object { $_.DisplayName -like "Azure Connected Machine Agent*" } | Select-Object -First 1
