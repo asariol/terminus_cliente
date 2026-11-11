@@ -294,9 +294,34 @@ Function Get-ConfigArc {
 }
 
 # Lineas de administrators_authorized_keys separadas en nuestras / ajenas.
+# Lee un fichero de claves. El sistema anterior a veces deja permisos solo
+# para SYSTEM (ni Administradores pueden leer). En los modos que modifican
+# ($script:Corregir) se dan permisos a Administradores (sshd lo admite);
+# en Validar no se toca nada y se avisa.
+$script:Corregir  = $false
+$script:SinAcceso = @()
+Function Leer-Lineas {
+    param([string]$Fichero)
+    $dir = Split-Path $Fichero
+    $ok = $true
+    try { if (Test-Path -LiteralPath $dir) { $null = Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop } } catch { $ok = $false }
+    try { $null = [IO.File]::ReadAllText($Fichero) }
+    catch [IO.FileNotFoundException] { } catch [IO.DirectoryNotFoundException] { } catch { $ok = $false }
+    if (-not $ok) {
+        if (-not $script:Corregir) { if ($script:SinAcceso -notcontains $Fichero) { $script:SinAcceso += $Fichero }; return @() }
+        EscribeLog "  Sin acceso de Administradores a $Fichero (permisos del sistema anterior): se corrigen." Yellow
+        if ($Fichero -eq $AdminKeys) { Set-AclSsh $Fichero }
+        else {
+            takeown /f $dir /a /r /d S 1>$null 2>$null
+            icacls $dir /grant "*${SID_ADMINS}:(OI)(CI)F" /T /C /Q 1>$null 2>$null
+        }
+    }
+    if (-not (Test-Path -LiteralPath $Fichero)) { return @() }
+    return @(Get-Content -LiteralPath $Fichero | Where-Object { $_.Trim() -ne "" })
+}
+
 Function Get-LineasClaves {
-    $todas = @()
-    if (Test-Path $AdminKeys) { $todas = @(Get-Content $AdminKeys | Where-Object { $_.Trim() -ne "" }) }
+    $todas = @(Leer-Lineas $AdminKeys)
     [pscustomobject]@{
         Terminus = @($todas | Where-Object { $_.TrimEnd() -match "\s$MARCA$" })
         Otras    = @($todas | Where-Object { $_.TrimEnd() -notmatch "\s$MARCA$" })
@@ -532,8 +557,9 @@ Function Set-ClaveUsuario {
         # Al quitar se revisan todos los perfiles: no hace falta saber el usuario.
         foreach ($pf in Get-CimInstance Win32_UserProfile -ErrorAction SilentlyContinue) {
             $f = "$($pf.LocalPath)\.ssh\authorized_keys"
-            if (-not $pf.LocalPath -or -not (Test-Path $f)) { continue }
-            $todas = @(Get-Content $f)
+            if (-not $pf.LocalPath -or -not (Test-Path $pf.LocalPath)) { continue }
+            $todas = @(Leer-Lineas $f)
+            if (-not $todas) { continue }
             $otras = @($todas | Where-Object { $_.TrimEnd() -notmatch "\s$MARCA$" })
             if ($otras.Count -eq $todas.Count) { continue }
             Copy-Item $f "$f.terminus_$(Get-Date -Format yyyyMMddHHmmss).bak" -Force
@@ -544,8 +570,8 @@ Function Set-ClaveUsuario {
     }
     $u = Get-ClavesUsuarioPath
     if (-not $u) { EscribeLog "  Usuario sin perfil en este equipo: solo administrators_authorized_keys." DarkGray; return }
+    $todas  = @(Leer-Lineas $u.Fichero)        # primero: corrige permisos si hace falta
     $existe = Test-Path $u.Fichero
-    $todas  = if ($existe) { @(Get-Content $u.Fichero | Where-Object { $_.Trim() -ne "" }) } else { @() }
     $otras  = @($todas | Where-Object { $_.TrimEnd() -notmatch "\s$MARCA$" })
     $mias   = @($todas | Where-Object { $_.TrimEnd() -match "\s$MARCA$" })
     $esperada = Get-LineaClaveEsperada
@@ -827,6 +853,9 @@ Function Modo-Validar {
         Resultado INFO "Detectado: $($old.Claves) clave(s) ajenas, regla firewall anterior: $($old.ReglaSshd), ficheros del sistema anterior: $($old.FicherosRsa)"
     } else { Resultado INFO "No se detecta entorno antiguo" }
 
+    foreach ($f in $script:SinAcceso) {
+        Resultado AVISO "Sin acceso de lectura a $f (solo SYSTEM, sistema anterior): [I] o [R] lo corrige"
+    }
     Titulo "Resumen"
     EscribeLog ("  OK: {0}   AVISOS: {1}   ERRORES: {2}" -f $Resumen.OK, $Resumen.AVISO, $Resumen.ERROR) $(if ($Resumen.ERROR) { "Red" } elseif ($Resumen.AVISO) { "Yellow" } else { "Green" })
     EscribeLog "  Informe guardado en: $LogFile" DarkGray
@@ -1257,6 +1286,7 @@ if (-not (EsAdministrador)) {
 if ($PSScriptRoot -match '^[A-Za-z]:\\Terminus$') { Proteger-Carpeta $PSScriptRoot }
 
 try {
+    $script:Corregir = $Modo -in "Instalar", "Manual", "Reparar", "Quitar", "Limpiar"
     switch ($Modo) {
         "Validar"  { Modo-Validar }
         "Instalar" { Modo-Instalar }
