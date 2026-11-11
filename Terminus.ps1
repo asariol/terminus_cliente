@@ -312,8 +312,11 @@ Function Leer-Lineas {
         EscribeLog "  Sin acceso de Administradores a $Fichero (permisos del sistema anterior): se corrigen." Yellow
         if ($Fichero -eq $AdminKeys) { Set-AclSsh $Fichero }
         else {
-            takeown /f $dir /a /r /d S 1>$null 2>$null
-            icacls $dir /grant "*${SID_ADMINS}:(OI)(CI)F" /T /C /Q 1>$null 2>$null
+            # Carpeta .ssh primero (sin /r: su /d depende del idioma), luego sus ficheros
+            takeown /f $dir /a 1>$null 2>$null
+            icacls $dir /grant "*${SID_ADMINS}:(OI)(CI)F" /C /Q 1>$null 2>$null
+            takeown /f "$dir\*" /a 1>$null 2>$null
+            icacls "$dir\*" /grant "*${SID_ADMINS}:F" /C /Q 1>$null 2>$null
         }
     }
     if (-not (Test-Path -LiteralPath $Fichero)) { return @() }
