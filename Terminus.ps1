@@ -405,7 +405,10 @@ Function Get-EntornoAntiguo {
 # Deja un fichero con permisos SYSTEM + Administradores (propietario Administradores).
 Function Set-AclSsh {
     param([string]$Fichero)
-    icacls $Fichero /setowner "*$SID_ADMINS" 1>$null
+    # takeown activa el privilegio de tomar posesion (icacls /setowner no, y
+    # falla si el fichero solo era de SYSTEM)
+    takeown /f $Fichero /a 1>$null 2>$null
+    icacls $Fichero /setowner "*$SID_ADMINS" 1>$null 2>$null
     icacls $Fichero /inheritance:r 1>$null
     icacls $Fichero /grant:r "*${SID_ADMINS}:F" "*${SID_SYSTEM}:F" 1>$null
     foreach ($r in (Get-Acl $Fichero).Access) {
