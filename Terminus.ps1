@@ -131,6 +131,9 @@ Function Pregunta {
 # cambiar los scripts que luego se ejecutan como administrador.
 Function Proteger-Carpeta {
     param([string]$Ruta)
+    # En PowerShell 5.1, con ErrorAction Stop, un "2>$null" de icacls/takeown
+    # convierte su aviso en error y corta el script: aqui se continua.
+    $ErrorActionPreference = "Continue"
     if (-not (Test-Path $Ruta)) { return }
     # 1. La carpeta: sin herencia de C:\, solo Administradores y SYSTEM (heredable)
     icacls $Ruta /inheritance:r /grant:r "*${SID_ADMINS}:(OI)(CI)F" "*${SID_SYSTEM}:(OI)(CI)F" /C /Q 1>$null 2>$null
@@ -302,6 +305,9 @@ $script:Corregir  = $false
 $script:SinAcceso = @()
 Function Leer-Lineas {
     param([string]$Fichero)
+    # En PowerShell 5.1, con ErrorAction Stop, un "2>$null" de icacls/takeown
+    # convierte su aviso en error y corta el script: aqui se continua.
+    $ErrorActionPreference = "Continue"
     $dir = Split-Path $Fichero
     $ok = $true
     try { if (Test-Path -LiteralPath $dir) { $null = Get-ChildItem -LiteralPath $dir -Force -ErrorAction Stop } } catch { $ok = $false }
@@ -405,10 +411,12 @@ Function Get-EntornoAntiguo {
 # Deja un fichero con permisos SYSTEM + Administradores (propietario Administradores).
 Function Set-AclSsh {
     param([string]$Fichero)
-    # takeown activa el privilegio de tomar posesion (icacls /setowner no, y
-    # falla si el fichero solo era de SYSTEM)
+    # En PowerShell 5.1, con ErrorAction Stop, un "2>$null" de icacls/takeown
+    # convierte su aviso en error y corta el script: aqui se continua.
+    $ErrorActionPreference = "Continue"
+    # Propietario = Administradores (takeown activa el privilegio necesario;
+    # icacls /setowner falla si el fichero solo era de SYSTEM)
     takeown /f $Fichero /a 1>$null 2>$null
-    icacls $Fichero /setowner "*$SID_ADMINS" 1>$null 2>$null
     icacls $Fichero /inheritance:r 1>$null
     icacls $Fichero /grant:r "*${SID_ADMINS}:F" "*${SID_SYSTEM}:F" 1>$null
     foreach ($r in (Get-Acl $Fichero).Access) {
@@ -448,7 +456,7 @@ Function Instalar-OpenSSHManual {
     Move-Item "$DirTemp\OpenSSH-Win64" $destino
     # Move-Item conserva los permisos de TEMP (solo este usuario): sshd necesita
     # que Usuarios pueda leer la carpeta (si no, corta tras KEXINIT).
-    icacls $destino /reset /T /C /Q 1>$null 2>$null
+    & { $ErrorActionPreference = "Continue"; icacls $destino /reset /T /C /Q 1>$null 2>$null }
     & powershell -NoProfile -ExecutionPolicy Bypass -File "$destino\install-sshd.ps1" | Out-Null
 
     # PATH de sistema (para ssh-keygen, etc.)
@@ -1174,7 +1182,7 @@ Function Modo-Limpiar {
     if ($ssh.Tipo -eq "Manual") {
         $un = Join-Path $ssh.Carpeta "uninstall-sshd.ps1"
         if (Test-Path $un) { & powershell -NoProfile -ExecutionPolicy Bypass -File $un | Out-Null }
-        sc.exe delete sshd 1>$null 2>$null
+        & { $ErrorActionPreference = "Continue"; sc.exe delete sshd 1>$null 2>$null }
         Remove-Item $ssh.Carpeta -Recurse -Force -ErrorAction SilentlyContinue
         $path = ([Environment]::GetEnvironmentVariable("Path", "Machine") -split ';' | Where-Object { $_ -and $_ -ne $ssh.Carpeta }) -join ';'
         [Environment]::SetEnvironmentVariable("Path", $path, "Machine")
