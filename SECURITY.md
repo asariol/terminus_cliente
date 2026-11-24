@@ -78,7 +78,9 @@ Con extensiones y Guest Configuration desactivados en el agente, desde Azure no 
 | Los scripts no están firmados (se ejecutan con `-ExecutionPolicy Bypass`). | El código es abierto y legible. Se recomienda revisarlo y comprobar el hash de la versión descargada antes de ejecutarlo. |
 | Dependencia del servicio de Microsoft (Azure Arc). | Si Azure no está disponible no hay acceso remoto; no se abre ninguna vía alternativa. |
 
-## Desinstalación
+## Cortar el acceso o desinstalar
+
+- Corte inmediato sin desinstalar: `azcmagent config set incomingconnections.enabled false` (o detener el servicio `himds` o `sshd`). Para reactivarlo, `true`.
 
 - `[Q] Quitar`: desconecta y desinstala el agente de Azure Arc (y borra el equipo de Azure), quita la línea de la clave y el bloque de `sshd_config`. OpenSSH y cualquier sistema anterior quedan como estaban.
 - `[L] Limpiar`: elimina todo, OpenSSH incluido, previa copia de seguridad y confirmación escrita.
