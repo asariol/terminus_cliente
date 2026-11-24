@@ -14,12 +14,19 @@
    .\Terminus.ps1 -Modo Salir                   (borra el secreto del SP si quedo en la config)
 
  Configuracion:
-   Terminus.config.ps1        generica (en el repositorio, igual para todos)
-   Terminus.config.local.ps1  opcional, junto al script, NO va al repositorio.
-                              Sobrescribe valores de la generica (IDs, usuario,
-                              restos del sistema antiguo...).
-   Lo que falte se pregunta por pantalla al ejecutar. El secreto del
-   Service Principal se pide SIEMPRE y no se guarda nunca.
+   Terminus.config.ps1         generica (en el repositorio, igual para todos)
+   Terminus.config.local.psd1  datos del entorno, junto al script, NO va al
+                               repositorio. Es un fichero de DATOS: se lee con
+                               Import-PowerShellDataFile, no se ejecuta.
+   Lo que falte se pregunta por pantalla al ejecutar.
+
+ Alta en Azure (dos formas):
+   - Recomendada: con la cuenta personal del operador (inicio de sesion con
+     codigo en el navegador + MFA). No hay ningun secreto en el equipo.
+   - Con Service Principal: solo si SpSecret viene en la configuracion
+     local; se borra del fichero y del historial al terminar.
+
+ Seguridad: ver SECURITY.md (que hace y que NO hace este script).
 
  Convivencia con un sistema de acceso anterior por SSH:
    - Instalar y Reparar NO tocan nada del entorno antiguo:
@@ -65,11 +72,18 @@ if (-not (Test-Path $configFile)) {
 . $configFile
 
 # Configuracion local (opcional): sobrescribe claves de la generica.
-$configLocal = Join-Path $PSScriptRoot "Terminus.config.local.ps1"
+# Formato actual: .psd1 de DATOS (Import-PowerShellDataFile no ejecuta codigo).
+# El .ps1 antiguo ($TerminusLocal = @{...}) se lee igual, por compatibilidad.
+$configLocal     = Join-Path $PSScriptRoot "Terminus.config.local.psd1"
+$configLocalAnt  = Join-Path $PSScriptRoot "Terminus.config.local.ps1"
+$TerminusLocal   = $null
 if (Test-Path $configLocal) {
-    . $configLocal
-    if ($TerminusLocal) { foreach ($k in $TerminusLocal.Keys) { $Terminus[$k] = $TerminusLocal[$k] } }
+    $TerminusLocal = Import-PowerShellDataFile $configLocal
+} elseif (Test-Path $configLocalAnt) {
+    . $configLocalAnt
+    $configLocal = $configLocalAnt
 }
+if ($TerminusLocal) { foreach ($k in $TerminusLocal.Keys) { $Terminus[$k] = $TerminusLocal[$k] } }
 if (-not $Terminus.Legado) { $Terminus.Legado = @{} }
 foreach ($k in "Ficheros", "IPs") { if (-not $Terminus.Legado[$k]) { $Terminus.Legado[$k] = @() } }
 
@@ -338,13 +352,23 @@ Function Get-LineasClaves {
 }
 
 # Linea de clave tal como debe quedar segun la configuracion.
+#  - from=...        : solo conexiones que llegan por el agente Arc (local)
+#  - permitopen=...  : la unica redireccion posible es al RDP local (3389)
+#  - Solo RDP (defecto): "restrict" quita terminal, agente, X11 y
+#    redirecciones; "port-forwarding" devuelve solo la redireccion (limitada
+#    por permitopen); "command" fijo: si alguien intenta ejecutar algo, solo
+#    se muestra un mensaje. No hay consola remota.
+#  - PermitirComandos: sin "restrict" ni "command" (comandos remotos por SSH).
 Function Get-LineaClaveEsperada {
     $op = @()
     if ($Terminus.RestringirLocal) { $op += 'from="127.0.0.1,::1"' }
-    if ($Terminus.OpcionesClave)   { $op += $Terminus.OpcionesClave }
-    $k = $Terminus.ClavePublica.Trim()
-    if ($op) { $k = ($op -join ",") + " " + $k }
-    return $k
+    if ($Terminus.PermitirComandos) {
+        $op += 'no-agent-forwarding', 'no-X11-forwarding'
+    } else {
+        $op += 'restrict', 'port-forwarding', 'command="echo Terminus: acceso solo para el tunel RDP"'
+    }
+    $op += 'permitopen="localhost:3389"', 'permitopen="127.0.0.1:3389"'
+    return ($op -join ",") + " " + $Terminus.ClavePublica.Trim()
 }
 
 # Permisos correctos para ficheros que lee sshd: solo SYSTEM y Administradores,
@@ -422,6 +446,77 @@ Function Set-AclSsh {
     foreach ($r in (Get-Acl $Fichero).Access) {
         try { $sid = $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { continue }
         if ($sid -ne $SID_ADMINS -and $sid -ne $SID_SYSTEM) { icacls $Fichero /remove:g "*$sid" 1>$null }
+    }
+}
+
+# ---------------------------------------------------------------
+# Endurecimiento de sshd (solo si en el equipo NO hay otro sistema de
+# acceso por SSH): escucha solo en 127.0.0.1 / ::1 (Arc entra por ahi) y
+# sin autenticacion por contrasena. Va en un bloque marcado al principio
+# de sshd_config, con copia previa; se valida con "sshd -t" y, si la
+# configuracion no es valida, se restaura la copia.
+# ---------------------------------------------------------------
+$MarcaSshdIni = "# --- Terminus: inicio (solo conexiones locales y solo claves) ---"
+$MarcaSshdFin = "# --- Terminus: fin ---"
+
+Function Test-ConfigSshd {
+    param([string]$Sshd)
+    $ErrorActionPreference = "Continue"
+    $salida = (& $Sshd -t -f $SshdConfig 2>&1 | Out-String).Trim()
+    return [pscustomobject]@{ Ok = ($LASTEXITCODE -eq 0); Salida = $salida }
+}
+
+Function Endurecer-Sshd {
+    param([string]$Sshd)
+    if (-not $Terminus.EndurecerSshd) { EscribeLog "  Endurecimiento de sshd desactivado en la configuracion." DarkGray; return }
+    if (-not (Test-Path $SshdConfig) -or -not $Sshd) { EscribeLog "  AVISO: no se encuentra sshd_config: no se endurece." Yellow; return }
+    $cfg = @(Get-Content $SshdConfig)
+    if ($cfg -contains $MarcaSshdIni) { EscribeLog "  sshd ya endurecido (solo local, sin contrasenas)." DarkGray; return }
+
+    $bak = "$SshdConfig.terminus_$(Get-Date -Format yyyyMMddHHmmss).bak"
+    Copy-Item $SshdConfig $bak -Force
+    # ListenAddress activos se comentan (si no, se sumarian a los nuestros)
+    $cfg = $cfg | ForEach-Object { if ($_ -match '^\s*ListenAddress\s') { "#Terminus# $_" } else { $_ } }
+    # Al principio del fichero: antes de cualquier bloque Match (valores globales)
+    $bloque = @($MarcaSshdIni, "ListenAddress 127.0.0.1", "ListenAddress ::1", "PasswordAuthentication no", "ChallengeResponseAuthentication no", $MarcaSshdFin, "")
+    Set-Content $SshdConfig ($bloque + $cfg) -Encoding ASCII
+
+    $t = Test-ConfigSshd $Sshd
+    if (-not $t.Ok) {
+        Copy-Item $bak $SshdConfig -Force
+        EscribeLog "  AVISO: sshd no acepta la configuracion endurecida ($($t.Salida)). Se deja como estaba." Yellow
+        return
+    }
+    EscribeLog "  sshd endurecido: escucha solo en 127.0.0.1/::1 y sin contrasenas (copia: $(Split-Path $bak -Leaf))." Green
+}
+
+# Deshace el bloque de Terminus en sshd_config (al quitar Terminus).
+Function Restaurar-Sshd {
+    if (-not (Test-Path $SshdConfig)) { return }
+    $cfg = @(Get-Content $SshdConfig)
+    if ($cfg -notcontains $MarcaSshdIni) { return }
+    $fuera = $false; $saltar = $false
+    $nuevo = foreach ($l in $cfg) {
+        if ($l -eq $MarcaSshdIni) { $fuera = $true; continue }
+        if ($fuera) { if ($l -eq $MarcaSshdFin) { $fuera = $false; $saltar = $true }; continue }
+        if ($saltar) { $saltar = $false; if (-not $l.Trim()) { continue } }   # linea en blanco que anadimos
+        $l -replace '^#Terminus# ', ''
+    }
+    Copy-Item $SshdConfig "$SshdConfig.terminus_$(Get-Date -Format yyyyMMddHHmmss).bak" -Force
+    Set-Content $SshdConfig $nuevo -Encoding ASCII
+    EscribeLog "  sshd_config: bloque de Terminus quitado (vuelve a su configuracion anterior)." Green
+}
+
+# Configuracion efectiva de sshd (sshd -T): direcciones y contrasenas.
+Function Get-EfectivaSshd {
+    param([string]$Sshd)
+    $ErrorActionPreference = "Continue"
+    if (-not $Sshd -or -not (Test-Path $Sshd)) { return $null }
+    $t = @(& $Sshd -T -f $SshdConfig 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $t) { return $null }
+    [pscustomobject]@{
+        Escucha    = @($t | Where-Object { $_ -like "listenaddress *" } | ForEach-Object { $_.Split(" ")[1] })
+        Contrasena = (($t | Where-Object { $_ -like "passwordauthentication *" } | Select-Object -First 1) -split " ")[-1]
     }
 }
 
@@ -610,7 +705,9 @@ Function Set-ClaveUsuario {
 }
 
 Function Asegurar-Clave {
-    if ($Terminus.ClavePublica -match "PEGAR_AQUI") { throw "Falta la clave publica en Terminus.config.ps1." }
+    if ($Terminus.ClavePublica -notmatch '^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+ terminus$') {
+        throw "Falta o no es valida la clave publica de operadores (ClavePublica en la configuracion local)."
+    }
     if (-not (Test-Path $SshData)) { New-Item -ItemType Directory -Path $SshData -Force | Out-Null }
 
     $esperada = Get-LineaClaveEsperada
@@ -665,26 +762,26 @@ Function Configurar-AgenteArc {
 }
 
 # Borra el secreto del SP de todo lo que pueda quedar en disco:
-#  - la linea SpSecret de Terminus.config.local.ps1 (si se puso alli)
+#  - la linea SpSecret de la configuracion local (si se puso alli)
 #  - las lineas del historial de PowerShell que lo contengan (al pegar
 #    la configuracion en la consola, PSReadLine la guarda en un fichero)
 # Se ejecuta siempre tras el alta, haya ido bien o mal.
 Function Borrar-Secreto {
     param([string]$Valor)
     if (-not $Valor) { return }
-    $local = Join-Path $PSScriptRoot "Terminus.config.local.ps1"
+    $local = $configLocal
     if (Test-Path $local) {
         try {
             $lineas = Get-Content $local -ErrorAction Stop
             if ($lineas -match '^\s*SpSecret\s*=') {
                 $lineas | Where-Object { $_ -notmatch '^\s*SpSecret\s*=' } | Set-Content $local -Encoding ASCII -ErrorAction Stop
-                EscribeLog "  Secreto eliminado de Terminus.config.local.ps1" Green
+                EscribeLog "  Secreto eliminado de $(Split-Path $local -Leaf)" Green
             }
         } catch {
             # Si no se puede reescribir, mejor sin fichero que con el secreto dentro.
             Remove-Item $local -Force -ErrorAction SilentlyContinue
             if (Test-Path $local) { EscribeLog "  AVISO: no se pudo borrar el secreto de $local. Borrar el fichero a mano." Red }
-            else { EscribeLog "  Terminus.config.local.ps1 eliminado (contenia el secreto)." Yellow }
+            else { EscribeLog "  $(Split-Path $local -Leaf) eliminado (contenia el secreto)." Yellow }
         }
     }
     $hist = "$env:APPDATA\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt"
@@ -714,31 +811,30 @@ Function Conectar-AgenteArc {
         return
     }
 
-    $secreto = $Terminus.SpSecret
-    if ($secreto) { EscribeLog "  Secreto tomado de la configuracion local (se borrara al terminar)." DarkGray }
-    else {
-        # Pegar con clic derecho: Ctrl+V aqui mete un caracter de control.
-        $s = Read-Host "Secreto del Service Principal de alta (pegar con CLIC DERECHO; no se guarda)" -AsSecureString
-        $secreto = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))
-        if ($secreto.Length -lt 20 -or $secreto -match '[\x00-\x1F]') { throw "Secreto no valido (pegado con Ctrl+V?). Volver a pegar la linea de instalacion y repetir [I]." }
-    }
-    $tags = ($Etiquetas.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ","
+    $tags   = ($Etiquetas.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ","
+    $comun  = @("--tenant-id", $Terminus.TenantId, "--subscription-id", $Terminus.SubscriptionId,
+                "--resource-group", $Terminus.ResourceGroup, "--location", $Terminus.Location,
+                "--resource-name", $NombreRecurso, "--tags", $tags, "--cloud", "AzureCloud")
+    $logArc = "$DirTerminus\arc_connect.log"
 
-    EscribeLog "  Conectando a Azure como '$NombreRecurso'..." Yellow
-    & $AzcmExe connect `
-        --service-principal-id     $Terminus.SpAppId `
-        --service-principal-secret $secreto `
-        --tenant-id                $Terminus.TenantId `
-        --subscription-id          $Terminus.SubscriptionId `
-        --resource-group           $Terminus.ResourceGroup `
-        --location                 $Terminus.Location `
-        --resource-name            $NombreRecurso `
-        --tags                     $tags `
-        --cloud AzureCloud 2>&1 | Out-File -Append "$DirTerminus\arc_connect.log" -Encoding UTF8
-    $codigo = $LASTEXITCODE
-    Borrar-Secreto $secreto
-    $secreto = $null
-    if ($codigo -ne 0) { throw "azcmagent connect fallo (codigo $codigo). Ver $DirTerminus\arc_connect.log" }
+    if ($Terminus.SpSecret) {
+        # Service Principal (solo si el secreto viene en la configuracion local)
+        EscribeLog "  Alta con Service Principal (el secreto se borrara al terminar)." DarkGray
+        EscribeLog "  Conectando a Azure como '$NombreRecurso'..." Yellow
+        & $AzcmExe connect --service-principal-id $Terminus.SpAppId --service-principal-secret $Terminus.SpSecret @comun 2>&1 |
+            Out-File -Append $logArc -Encoding UTF8
+        $codigo = $LASTEXITCODE
+        Borrar-Secreto $Terminus.SpSecret
+    } else {
+        # Recomendado: cuenta personal del operador, sin ningun secreto en el
+        # equipo. azcmagent muestra una direccion y un codigo: se abre en
+        # cualquier navegador y se inicia sesion con la cuenta (y MFA).
+        EscribeLog "  Alta con tu cuenta de Azure: abre la direccion que aparece, escribe el codigo e inicia sesion (MFA)." Yellow
+        & $AzcmExe connect --use-device-code @comun 2>&1 |
+            ForEach-Object { $l = "$_"; Write-Host "    $l"; $l } | Out-File -Append $logArc -Encoding UTF8
+        $codigo = $LASTEXITCODE
+    }
+    if ($codigo -ne 0) { throw "azcmagent connect fallo (codigo $codigo). Ver $logArc" }
     EscribeLog "  Equipo dado de alta en Azure: $NombreRecurso" Green
 }
 
@@ -788,6 +884,12 @@ Function Modo-Validar {
         else          { Resultado ERROR "Nada escucha en el puerto 22" }
     }
 
+    $ef = Get-EfectivaSshd $ssh.Ruta
+    if ($ef) {
+        $soloLocal = -not ($ef.Escucha | Where-Object { $_ -notmatch '^(127\.0\.0\.1|\[?::1\]?)(:\d+)?$' })
+        Resultado $(if ($soloLocal) { "OK" } else { "INFO" }) "sshd escucha en: $($ef.Escucha -join ', ')$(if (-not $soloLocal) { ' (red: lo filtra el firewall; la clave Terminus solo vale en local)' })"
+        Resultado $(if ($ef.Contrasena -eq "no") { "OK" } else { "INFO" }) "sshd con contrasenas: $($ef.Contrasena)"
+    }
     if (Test-Path $SshdConfig) {
         $cfg = Get-Content $SshdConfig
         if ($cfg -match '^\s*PubkeyAuthentication\s+no')        { Resultado ERROR "sshd_config: PubkeyAuthentication no" }
@@ -811,7 +913,9 @@ Function Modo-Validar {
     $lin = Get-LineasClaves
     if (Test-Path $AdminKeys) {
         Resultado INFO "administrators_authorized_keys: $($lin.Otras.Count) clave(s) ajenas, $($lin.Terminus.Count) de Terminus"
-        if ($lin.Terminus.Count -eq 1 -and $lin.Terminus[0].Trim() -eq (Get-LineaClaveEsperada)) { Resultado OK "Clave Terminus correcta" }
+        Resultado INFO "Modo configurado: $(if ($Terminus.PermitirComandos) { 'tunel RDP + comandos remotos' } else { 'solo tunel RDP' })"
+        if (-not $Terminus.ClavePublica) { Resultado AVISO "Sin ClavePublica en la configuracion local: no se puede comparar la clave" }
+        elseif ($lin.Terminus.Count -eq 1 -and $lin.Terminus[0].Trim() -eq (Get-LineaClaveEsperada)) { Resultado OK "Clave Terminus correcta" }
         elseif ($lin.Terminus.Count -eq 0) { Resultado AVISO "Clave Terminus no presente" }
         else { Resultado AVISO "Clave Terminus distinta de la configurada o duplicada" }
         $cu = Get-ClavesUsuarioPath
@@ -882,7 +986,12 @@ Function Modo-Instalar {
     $so = Get-InfoSO
     EscribeLog "TERMINUS - INSTALACION  ($($so.Nombre), build $($so.Build))" Cyan
     if (-not $so.Soportado) { throw "Sistema no soportado. Minimo Windows Server 2016." }
-    Completar-Datos "TenantId", "SubscriptionId", "SpAppId", "UsuarioLocal"
+    $datos = @("TenantId", "SubscriptionId", "UsuarioLocal")
+    if ($Terminus.SpSecret) { $datos += "SpAppId" }      # solo para el alta con Service Principal
+    Completar-Datos $datos
+    if ($Terminus.ClavePublica -notmatch '^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+ terminus$') {
+        throw "Falta o no es valida la clave publica de operadores (ClavePublica en la configuracion local)."
+    }
 
     # --- 1. Datos del cliente -----------------------------------
     if (-not $Codigo)  { $script:Codigo  = Read-Host "Codigo de cliente (ej. C001)" }
@@ -946,6 +1055,9 @@ Function Modo-Instalar {
     Titulo "3/5 Usuario y clave"
     Asegurar-Usuario
     Asegurar-Clave
+    EscribeLog "  Modo de la clave: $(if ($Terminus.PermitirComandos) { 'tunel RDP + comandos remotos' } else { 'solo tunel RDP (sin consola ni comandos)' })." White
+    if ($old.Presente) { EscribeLog "  Hay otro sistema de acceso por SSH: sshd_config no se modifica." DarkGray }
+    else               { Endurecer-Sshd (Get-EstadoOpenSSH).Ruta }
     Restart-Service sshd
     EscribeLog "  sshd reiniciado." DarkGray
 
@@ -1026,6 +1138,8 @@ Function Modo-Reparar {
     Titulo "Usuario y clave"
     Asegurar-Usuario
     Asegurar-Clave
+    if ((Get-EntornoAntiguo).Presente) { EscribeLog "  Hay otro sistema de acceso por SSH: sshd_config no se modifica." DarkGray }
+    else                              { Endurecer-Sshd $ssh.Ruta }
     $reiniciar = $true
 
     Titulo "Agente Azure Arc"
@@ -1048,7 +1162,8 @@ Function Modo-Reparar {
 }
 
 # Desconecta y desinstala el agente Arc (comun a Quitar y Limpiar).
-# Borrar el recurso en Azure es opcional: pide el secreto del SP.
+# El recurso en Azure se borra con el SP (si su secreto esta en la
+# configuracion) o con la cuenta del operador (codigo en el navegador).
 Function Quitar-AgenteArc {
     param($arc)
     if ($arc.Instalado) {
@@ -1061,12 +1176,14 @@ Function Quitar-AgenteArc {
                 & $AzcmExe disconnect --service-principal-id $Terminus.SpAppId --service-principal-secret $Terminus.SpSecret 2>&1 |
                     Out-File -Append "$DirTerminus\arc_connect.log" -Encoding UTF8
                 $hecho = ($LASTEXITCODE -eq 0)
+            } elseif (Pregunta "Borrar tambien el equipo de Azure iniciando sesion con tu cuenta (codigo en el navegador)?") {
+                & $AzcmExe disconnect --use-device-code 2>&1 | ForEach-Object { Write-Host "    $_" }
+                $hecho = ($LASTEXITCODE -eq 0)
             }
             if ($hecho) { EscribeLog "  Recurso '$($arc.Nombre)' eliminado de Azure." Green }
             else {
                 & $AzcmExe disconnect --force-local-only 2>&1 | Out-Null
-                if (-not $Terminus.SpSecret) { EscribeLog "  Sin secreto del SP en la configuracion (pegar la linea de instalacion para borrar tambien en Azure)." DarkGray }
-                else { EscribeLog "  El SP no pudo borrar el recurso (ver $DirTerminus\arc_connect.log)." Yellow }
+                EscribeLog "  No se ha borrado el recurso en Azure (ver $DirTerminus\arc_connect.log)." Yellow
                 EscribeLog "  Desconectado en local. Falta borrar el recurso en Azure (administrador, desde el bastion):" Yellow
                 EscribeLog "    az resource delete -g $($Terminus.ResourceGroup) -n $($arc.Nombre) --resource-type Microsoft.HybridCompute/machines" Yellow
             }
@@ -1109,6 +1226,7 @@ Function Modo-Quitar {
     Quitar-AgenteArc $arc
     Titulo "2/2 Clave Terminus"
     Quitar-ClaveTerminus
+    Restaurar-Sshd
     if (Get-Service sshd -ErrorAction SilentlyContinue) { Restart-Service sshd -ErrorAction SilentlyContinue }
     EscribeLog ""
     EscribeLog "  Terminus quitado. OpenSSH y el sistema anterior siguen igual." Green
@@ -1298,6 +1416,7 @@ if (-not (EsAdministrador)) {
 
 # Solo si es la carpeta de instalacion (X:\Terminus), no una de pruebas.
 if ($PSScriptRoot -match '^[A-Za-z]:\\Terminus$') { Proteger-Carpeta $PSScriptRoot }
+if (Test-Path $DirTerminus) { Proteger-Carpeta $DirTerminus }     # logs: solo Administradores
 
 try {
     $script:Corregir = $Modo -in "Instalar", "Manual", "Reparar", "Quitar", "Limpiar"
