@@ -22,22 +22,31 @@ Cada apertura de conexión queda registrada en el registro de actividad de Azure
 
 ## Restricciones de la clave SSH
 
-La línea que se añade a `administrators_authorized_keys` (y al `authorized_keys` del usuario del túnel) es, por defecto:
+La línea que se añade a `administrators_authorized_keys` (y al `authorized_keys` del usuario del túnel) depende de `PermitirComandos` en la configuración local. Hay dos modos:
+
+**Túnel RDP + comandos (por defecto, `PermitirComandos = $true`).** Para tareas automatizadas de soporte que ejecutan comandos en el servidor por SSH.
+
+```
+from="127.0.0.1,::1",no-agent-forwarding,no-X11-forwarding,permitopen="localhost:3389",permitopen="127.0.0.1:3389" ssh-ed25519 AAAA... terminus
+```
+
+**Solo túnel RDP (`PermitirComandos = $false`).** Para clientes que no quieren ejecución remota de comandos.
 
 ```
 from="127.0.0.1,::1",restrict,port-forwarding,command="echo Terminus: acceso solo para el tunel RDP",permitopen="localhost:3389",permitopen="127.0.0.1:3389" ssh-ed25519 AAAA... terminus
 ```
 
-| Opción | Efecto |
-|---|---|
-| `from="127.0.0.1,::1"` | La clave solo es válida para conexiones que llegan por el agente de Azure Arc. Desde la red local o Internet no sirve, aunque alguien abriera el puerto 22. |
-| `restrict` | Sin terminal, sin reenvío de agente, sin X11, sin redirecciones. |
-| `port-forwarding` + `permitopen` | Vuelve a permitir **solo** la redirección hacia el RDP local (puerto 3389). Ningún otro destino. |
-| `command="echo ..."` | Cualquier intento de ejecutar un comando o abrir una consola solo muestra ese mensaje. No hay shell remota. |
+| Opción | Modo | Efecto |
+|---|---|---|
+| `from="127.0.0.1,::1"` | Ambos | La clave solo es válida para conexiones que llegan por el agente de Azure Arc. Desde la red local o Internet no sirve, aunque alguien abriera el puerto 22. |
+| `permitopen` | Ambos | La única redirección posible es hacia el RDP local (puerto 3389). Ningún otro destino. |
+| `no-agent-forwarding`, `no-X11-forwarding` | Comandos | El servidor no puede usar las claves del técnico ni abrir ventanas en su equipo. |
+| `restrict` + `port-forwarding` | Solo RDP | Sin terminal, sin reenvío de agente ni X11; solo la redirección permitida por `permitopen`. |
+| `command="echo ..."` | Solo RDP | Cualquier intento de ejecutar un comando, abrir una consola o copiar ficheros solo muestra ese mensaje. |
 
-Este comportamiento se ha verificado con OpenSSH 9.x: el túnel al 3389 funciona; un comando (`id`), una consola, `scp` o un túnel a otro puerto se rechazan; la autenticación por contraseña se rechaza.
+Verificado con OpenSSH 9.x en modo solo RDP: el túnel al 3389 funciona; un comando (`id`), una consola, `scp` o un túnel a otro puerto se rechazan; la autenticación por contraseña se rechaza.
 
-`PermitirComandos = $true` (opcional, configuración local) quita `restrict` y `command` para permitir comandos remotos por SSH. Solo se activa si el cliente lo decide; la redirección sigue limitada al 3389 y la clave sigue limitada a `from=`.
+En el modo con comandos, quien supere Entra ID + MFA + rol en Azure y tenga la clave puede ejecutar comandos con el usuario del túnel, que es administrador. Por eso el control principal es la identidad (Entra ID con MFA, grupo autorizado) y el registro de cada acceso en Azure.
 
 ## Qué modifica en el servidor
 
@@ -74,7 +83,7 @@ Con extensiones y Guest Configuration desactivados en el agente, desde Azure no 
 | Riesgo | Mitigación |
 |---|---|
 | La clave privada de operadores es compartida por el equipo de soporte. | Sola no da acceso: sin cuenta Entra ID con MFA en el grupo autorizado no se abre el relay, y por la red la clave no es válida (`from=`). Retirar a una persona del grupo le quita el acceso a todos los servidores al momento. |
-| El usuario del túnel es administrador del servidor. | En el modo por defecto la clave no permite shell ni comandos: solo el túnel al RDP, donde la persona tiene que iniciar sesión con credenciales de Windows. |
+| El usuario del túnel es administrador del servidor y, en el modo por defecto, se pueden ejecutar comandos. | Hace falta identidad Entra ID con MFA en el grupo autorizado y cada acceso queda registrado. Si el cliente no necesita comandos, `PermitirComandos = $false` deja solo el túnel RDP, donde hay que iniciar sesión con credenciales de Windows. |
 | Los scripts no están firmados (se ejecutan con `-ExecutionPolicy Bypass`). | El código es abierto y legible. Se recomienda revisarlo y comprobar el hash de la versión descargada antes de ejecutarlo. |
 | Dependencia del servicio de Microsoft (Azure Arc). | Si Azure no está disponible no hay acceso remoto; no se abre ninguna vía alternativa. |
 

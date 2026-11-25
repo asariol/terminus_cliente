@@ -354,11 +354,12 @@ Function Get-LineasClaves {
 # Linea de clave tal como debe quedar segun la configuracion.
 #  - from=...        : solo conexiones que llegan por el agente Arc (local)
 #  - permitopen=...  : la unica redireccion posible es al RDP local (3389)
-#  - Solo RDP (defecto): "restrict" quita terminal, agente, X11 y
-#    redirecciones; "port-forwarding" devuelve solo la redireccion (limitada
-#    por permitopen); "command" fijo: si alguien intenta ejecutar algo, solo
-#    se muestra un mensaje. No hay consola remota.
-#  - PermitirComandos: sin "restrict" ni "command" (comandos remotos por SSH).
+#  - PermitirComandos (defecto): tunel RDP + comandos remotos por SSH. Sin
+#    reenvio de agente ni X11.
+#  - Solo RDP (PermitirComandos = $false): "restrict" quita terminal, agente,
+#    X11 y redirecciones; "port-forwarding" devuelve solo la redireccion
+#    (limitada por permitopen); "command" fijo: si alguien intenta ejecutar
+#    algo, solo se muestra un mensaje. No hay consola remota.
 Function Get-LineaClaveEsperada {
     $op = @()
     if ($Terminus.RestringirLocal) { $op += 'from="127.0.0.1,::1"' }

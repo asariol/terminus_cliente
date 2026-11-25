@@ -42,7 +42,7 @@ Se usa un usuario que **ya exista** en el servidor y sea administrador: local (`
 Detalle completo en [SECURITY.md](SECURITY.md). En resumen:
 
 - Sin puertos de entrada: el servidor solo sale por 443 hacia Microsoft. En instalaciones nuevas `sshd` escucha solo en `127.0.0.1`/`::1` y sin contrasenas.
-- Para conectar hace falta una cuenta Entra ID con MFA autorizada en Azure **y** la clave de operadores. La clave solo vale si la conexion llega por Azure Arc (`from=`) y solo permite el tunel al RDP local: sin consola ni comandos.
+- Para conectar hace falta una cuenta Entra ID con MFA autorizada en Azure **y** la clave de operadores. La clave solo vale si la conexion llega por Azure Arc (`from=`) y solo redirige al RDP local. Por defecto permite tambien comandos por SSH (automatizaciones); con `PermitirComandos = $false` queda solo el tunel RDP, sin consola ni comandos.
 - El agente Arc se configura solo para SSH (puerto 22), sin extensiones, Run Command ni Guest Configuration.
 - Este repositorio no contiene datos de ningun entorno ni la clave publica: van en el fichero local.
 - Si ya existe un sistema de acceso por SSH, Instalar y Reparar no lo modifican: solo se anaden o quitan las lineas marcadas con ` terminus`.

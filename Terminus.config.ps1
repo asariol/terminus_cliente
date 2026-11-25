@@ -17,7 +17,7 @@
 #        # operador (inicio de sesion con codigo + MFA): es la forma recomendada.
 #        SpAppId        = '<guid>'
 #        SpSecret       = '<secreto>'      # se BORRA del fichero y del historial al terminar
-#        PermitirComandos = $false         # $true = ademas del tunel RDP, comandos remotos por SSH
+#        PermitirComandos = $false         # solo tunel RDP (por defecto $true: tambien comandos por SSH)
 #        Legado = @{                        # restos de un sistema de acceso anterior (solo se detectan)
 #            Ficheros      = @('.ssh\<prefijo>_rsa*')
 #            ReglaFirewall = '<nombre de la regla>'
@@ -52,14 +52,16 @@ $Terminus = @{
     #  - from="127.0.0.1,::1": solo vale para conexiones que entran por el
     #    agente de Azure Arc (local). Desde la red no sirve aunque el puerto
     #    22 estuviera abierto.
-    #  - Solo tunel RDP (por defecto): "restrict" (sin terminal, agente, X11
-    #    ni redirecciones), "port-forwarding" + "permitopen" solo hacia el
-    #    RDP local, y "command" fijo: cualquier intento de ejecutar algo solo
-    #    muestra un mensaje. No hay consola remota.
-    #  - PermitirComandos = $true (opcional, decision del cliente): ademas del
-    #    tunel RDP permite comandos remotos por SSH (sustituto de Jenkins).
+    #  - PermitirComandos = $true (por defecto): tunel RDP + comandos remotos
+    #    por SSH (automatizaciones, sustituto de Jenkins). Sin reenvio de
+    #    agente ni X11; redireccion solo al RDP local.
+    #  - PermitirComandos = $false (si el cliente lo pide): solo tunel RDP.
+    #    "restrict" (sin terminal, agente, X11 ni redirecciones),
+    #    "port-forwarding" + "permitopen" solo hacia el RDP local, y
+    #    "command" fijo: cualquier intento de ejecutar algo solo muestra un
+    #    mensaje. No hay consola remota.
     RestringirLocal  = $true
-    PermitirComandos = $false
+    PermitirComandos = $true
 
     # Endurecer sshd si en el equipo no hay otro sistema de acceso por SSH:
     # escucha solo en 127.0.0.1/::1 y sin contrasenas (solo claves).
